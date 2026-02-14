@@ -1,3 +1,9 @@
 flask==3.0.0
 flask-cors==4.0.0
 python-dotenv==1.0.0
+Flask-SQLAlchemy==3.1.1
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.23
+PyJWT==2.11.0
+bcrypt==4.1.2
+Flask-Mail==0.9.1

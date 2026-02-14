@@ -1,10 +1,14 @@
-def register_routes(app):
-    """Register all application routes"""
+"""Main routes registration file"""
+from routes import register_routes as register_all_routes
+
+
+def setup_routes(app):
+    """Setup all application routes
     
-    @app.route('/api/health', methods=['GET'])
-    def health_check():
-        return {'status': 'healthy', 'message': 'Backend is running'}, 200
+    This is called from app.py to register all route blueprints and endpoints.
+    All route organization is handled in the routes package.
     
-    @app.route('/', methods=['GET'])
-    def index():
-        return {'message': 'Welcome to Hack The Tank Backend'}, 200
+    Args:
+        app: Flask application instance
+    """
+    register_all_routes(app)
