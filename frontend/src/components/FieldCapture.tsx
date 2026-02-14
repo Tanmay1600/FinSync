@@ -1,7 +1,8 @@
 import { type FormEvent, useState, useRef, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
-import { ScanLine, Mic, FileText, Plus, Camera, Square, Play, Loader } from 'lucide-react'
+import { ScanLine, Mic, FileText, Plus, Camera, Loader, MicOff } from 'lucide-react'
 import Tesseract from 'tesseract.js'
+import { useVoskSpeechRecognition } from '../hooks/useVoskSpeechRecognition'
 
 const TAG_OPTIONS = ['HNI', 'PMS', 'Channel partner', 'ESOP', 'Treasury']
 
@@ -31,19 +32,31 @@ export function FieldCapture() {
   // Camera/Audio state
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const [isCameraActive, setIsCameraActive] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [recordingTime, setRecordingTime] = useState(0)
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // OCR state
   const [isProcessingOCR, setIsProcessingOCR] = useState(false)
   const [ocrProgress, setOcrProgress] = useState(0)
   const [ocrText, setOcrText] = useState('')
   const [parsedInfo, setParsedInfo] = useState<ParsedBusinessCard | null>(null)
+
+  // Vosk speech recognition
+  const {
+    isReady: isVoskReady,
+    isListening: isVoskListening,
+    transcript: voskTranscript,
+    interimTranscript: voskInterim,
+    error: voskError,
+    startListening: startVoskListening,
+    stopListening: stopVoskListening,
+    resetTranscript: resetVoskTranscript,
+    isLoading: isVoskLoading,
+  } = useVoskSpeechRecognition()
 
   // Parse business card text to extract contact information
   const parseBusinessCardText = (text: string): ParsedBusinessCard => {
@@ -232,15 +245,11 @@ export function FieldCapture() {
         preprocessedImage,
         'eng',
         {
-          logger: (m) => {
+          logger: (m: { status: string; progress: number }) => {
             if (m.status === 'recognizing text') {
               setOcrProgress(Math.round(m.progress * 100))
             }
           },
-          tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
-          tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@.-+() ',
-          preserve_interword_spaces: '1',
         }
       )
 
@@ -352,47 +361,6 @@ export function FieldCapture() {
     }
   }
 
-  // Audio functions
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream)
-      const chunks: Blob[] = []
-
-      mediaRecorder.ondataavailable = (event) => {
-        chunks.push(event.data)
-      }
-
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' })
-        setAudioBlob(blob)
-        stream.getTracks().forEach(track => track.stop())
-      }
-
-      mediaRecorderRef.current = mediaRecorder
-      mediaRecorder.start()
-      setIsRecording(true)
-      setRecordingTime(0)
-      
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1)
-      }, 1000)
-    } catch (error) {
-      console.error('Error accessing microphone:', error)
-      alert('Microphone access denied. Please enable microphone permissions.')
-    }
-  }
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop()
-      setIsRecording(false)
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current)
-      }
-    }
-  }
-
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -401,10 +369,11 @@ export function FieldCapture() {
 
   // Cleanup on unmount
   useEffect(() => {
+    const intervalRef = recordingIntervalRef.current
     return () => {
       stopCamera()
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current)
+      if (intervalRef) {
+        clearInterval(intervalRef)
       }
     }
   }, [])
@@ -749,9 +718,25 @@ export function FieldCapture() {
       {mode === 'audio' && (
         <div className="audio-interface">
           <div className="audio-recorder">
+            {/* Vosk Status */}
+            <div className="vosk-status">
+              {isVoskLoading && (
+                <span className="vosk-loading">
+                  <Loader className="spin" size={16} />
+                  Loading speech model (offline)...
+                </span>
+              )}
+              {isVoskReady && !isVoskLoading && (
+                <span className="vosk-ready">✓ Offline speech recognition ready</span>
+              )}
+              {voskError && (
+                <span className="vosk-error">⚠ {voskError}</span>
+              )}
+            </div>
+
             <div className="recording-visualizer">
-              <Mic className={`mic-icon-large ${isRecording ? 'recording' : ''}`} />
-              <div className={`audio-waves ${isRecording ? 'active' : ''}`}>
+              <Mic className={`mic-icon-large ${isVoskListening || isRecording ? 'recording' : ''}`} />
+              <div className={`audio-waves ${isVoskListening || isRecording ? 'active' : ''}`}>
                 <div className="wave"></div>
                 <div className="wave"></div>
                 <div className="wave"></div>
@@ -759,43 +744,59 @@ export function FieldCapture() {
                 <div className="wave"></div>
               </div>
             </div>
+            
             <p className="recording-status">
-              {isRecording ? `Recording: ${formatTime(recordingTime)}` : 
+              {isVoskListening ? 'Listening & Transcribing...' :
+               isRecording ? `Recording: ${formatTime(recordingTime)}` : 
                audioBlob ? 'Recording completed' : 'Ready to record'}
             </p>
+
+            {/* Transcription Display */}
+            <div className="transcription-box">
+              <label>Transcription (Offline Speech-to-Text)</label>
+              <div className="transcription-content">
+                {voskTranscript && <span className="final-text">{voskTranscript}</span>}
+                {voskInterim && <span className="interim-text">{voskInterim}</span>}
+                {!voskTranscript && !voskInterim && (
+                  <span className="placeholder-text">Click "Start Transcription" to begin...</span>
+                )}
+              </div>
+            </div>
+
             <div className="recording-controls">
-              {!isRecording && !audioBlob && (
-                <button className="record-btn" onClick={startRecording}>
+              {/* Vosk Transcription Controls */}
+              {!isVoskListening && (
+                <button 
+                  className="record-btn" 
+                  onClick={() => {
+                    resetVoskTranscript()
+                    startVoskListening()
+                  }}
+                  disabled={!isVoskReady || isVoskLoading}
+                >
                   <Mic className="w-6 h-6" />
-                  Start Recording
+                  Start Transcription
                 </button>
               )}
-              {isRecording && (
-                <button className="stop-btn" onClick={stopRecording}>
-                  <Square className="w-6 h-6" />
-                  Stop Recording
+              {isVoskListening && (
+                <button className="stop-btn" onClick={stopVoskListening}>
+                  <MicOff className="w-6 h-6" />
+                  Stop Transcription
                 </button>
               )}
-              {audioBlob && (
-                <>
-                  <button className="play-btn" onClick={() => {
-                    const audio = new Audio(URL.createObjectURL(audioBlob))
-                    audio.play()
-                  }}>
-                    <Play className="w-6 h-6" />
-                    Play Recording
-                  </button>
-                  <button className="record-btn" onClick={() => {
-                    setAudioBlob(null)
-                    setRecordingTime(0)
-                  }}>
-                    <Mic className="w-6 h-6" />
-                    Record Again
-                  </button>
-                </>
+              
+              {/* Copy transcript to notes */}
+              {voskTranscript && (
+                <button 
+                  className="secondary" 
+                  onClick={() => setNote(prev => prev ? `${prev}\n${voskTranscript}` : voskTranscript)}
+                >
+                  Copy to Notes
+                </button>
               )}
+
               <button className="secondary" onClick={resetForm}>
-                {audioBlob ? 'Done' : 'Cancel'}
+                Cancel
               </button>
             </div>
           </div>

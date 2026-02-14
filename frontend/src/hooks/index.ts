@@ -1,0 +1,1 @@
+export { useVoskSpeechRecognition } from './useVoskSpeechRecognition'
