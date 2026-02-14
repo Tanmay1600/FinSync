@@ -19,6 +19,7 @@ wheels/
 .installed.cfg
 *.egg
 venv/
+.venv/
 .env
 .vscode/
 .DS_Store
