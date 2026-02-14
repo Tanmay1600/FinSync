@@ -2,11 +2,14 @@ from database import db
 from datetime import datetime
 from .all_enums import LeadState
 from sqlalchemy import Enum as SqlEnum
+from sqlalchemy import UniqueConstraint
 
 
 class Lead(db.Model):
     __tablename__ = 'leads'
-    
+    _table_args__ = (
+        UniqueConstraint('mobNo', 'orgId', name='uq_lead_mobile_org'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), nullable=False)

@@ -14,6 +14,18 @@ from sqlalchemy import desc, func
 # =========================================================
 # ADD INTERACTION
 # =========================================================
+from database import db
+from models import Interaction, InteractionTag, Lead, Tag, User
+from models.all_enums import LeadState
+
+from utils.validators import validate_name, validate_phone
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import desc, func
+
+from typing import Optional, Tuple, Dict
+
+
 def add_interaction(
     agent_id: int,
     name: str,
@@ -27,11 +39,16 @@ def add_interaction(
 ) -> Tuple[bool, Optional[Dict], Optional[str]]:
 
     try:
-        agent = User.query.get(agent_id)
+        # =====================================================
+        # FETCH AGENT
+        # =====================================================
+        agent = db.session.get(User, agent_id)
         if not agent:
-            return False, None, "Agent user not found"
+            return False, None, "Agent not found"
 
-        # ---------------- Validation ----------------
+        # =====================================================
+        # VALIDATION
+        # =====================================================
         is_valid, error = validate_name(name)
         if not is_valid:
             return False, None, error
@@ -43,16 +60,22 @@ def add_interaction(
         if mode not in ["stall", "field"]:
             return False, None, "Invalid mode"
 
-        # ---------------- Find Lead ----------------
+        mobNo = mobNo.strip()
+
+        # =====================================================
+        # FIND EXISTING LEAD
+        # =====================================================
         lead = Lead.query.filter_by(
-            mobNo=mobNo.strip(),
+            mobNo=mobNo,
             orgId=agent.orgId
         ).first()
 
         if not lead and not tagIds:
             return False, None, "tagIds required when creating new lead"
 
-        # ---------------- Tags + Score ----------------
+        # =====================================================
+        # TAGS + SCORE
+        # =====================================================
         tags = []
         new_score = 0
 
@@ -64,48 +87,39 @@ def add_interaction(
 
             new_score = sum(tag.score for tag in tags)
 
-        # =================================================
-        # CASE 1 — LEAD DOES NOT EXIST
-        # =================================================
+        # =====================================================
+        # CASE 1 — CREATE LEAD (RACE CONDITION SAFE)
+        # =====================================================
         if not lead:
 
             lead = Lead(
                 name=name.strip(),
                 email=email.strip() if email else None,
-                mobNo=mobNo.strip(),
+                mobNo=mobNo,
                 ownerId=agent_id,
                 orgId=agent.orgId,
                 state=LeadState.INTERACTION
             )
+
             db.session.add(lead)
-            db.session.flush()
 
-            interaction = Interaction(
-                lead_id=lead.id,
-                agent_id=agent_id,
-                mode=mode,
-                image_url=image_url,
-                audio_note_url=audio_url,
-                remarks=remarks,
-                score=new_score
-            )
+            try:
+                db.session.flush()  # attempt insert
+            except IntegrityError:
+                # another request created same lead
+                db.session.rollback()
 
-            db.session.add(interaction)
-            db.session.flush()
+                lead = Lead.query.filter_by(
+                    mobNo=mobNo,
+                    orgId=agent.orgId
+                ).first()
 
-            db.session.add_all([
-                InteractionTag(
-                    interaction_id=interaction.id,
-                    tag_id=tag.id
-                ) for tag in tags
-            ])
+                if not lead:
+                    return False, None, "Failed creating lead"
 
-            db.session.commit()
-            return True, interaction.to_dict(), None
-
-        # =================================================
+        # =====================================================
         # CASE 2 — OWNER UPDATES LAST INTERACTION
-        # =================================================
+        # =====================================================
         if agent_id == lead.ownerId:
 
             last_interaction = (
@@ -143,9 +157,9 @@ def add_interaction(
                 db.session.commit()
                 return True, last_interaction.to_dict(), None
 
-        # =================================================
-        # CASE 3 — OWNER LOCKED (STATE != INTERACTION)
-        # =================================================
+        # =====================================================
+        # CASE 3 — OWNER LOCKED
+        # =====================================================
         if lead.state != LeadState.INTERACTION:
 
             interaction = Interaction(
@@ -172,11 +186,12 @@ def add_interaction(
 
             result = interaction.to_dict()
             result["message"] = "Owner locked due to lead state"
+
             return True, result, None
 
-        # =================================================
-        # CASE 4 — OWNERSHIP SCORING (CORRECT LOGIC)
-        # =================================================
+        # =====================================================
+        # CASE 4 — OWNERSHIP SCORING
+        # =====================================================
         owner_score = db.session.query(
             func.coalesce(func.sum(Interaction.score), 0)
         ).filter(
@@ -194,6 +209,9 @@ def add_interaction(
         if agent_score > owner_score + 5:
             lead.ownerId = agent_id
 
+        # =====================================================
+        # CREATE NEW INTERACTION
+        # =====================================================
         interaction = Interaction(
             lead_id=lead.id,
             agent_id=agent_id,
@@ -221,7 +239,6 @@ def add_interaction(
     except Exception as e:
         db.session.rollback()
         return False, None, str(e)
-
 
 # =========================================================
 # GET ALL LEADS (ROLE BASED)
