@@ -57,6 +57,7 @@ export function FieldCapture() {
   // Camera/Audio state
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [isCameraActive, setIsCameraActive] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [capturedImage, setCapturedImage] = useState<string | null>(null)
@@ -262,7 +263,7 @@ export function FieldCapture() {
 
 
   // Process OCR on captured image
-  const processOCR = async (imageDataUrl: string) => {
+  const processOCR = async (imageDataUrl: string): Promise<ParsedBusinessCard | null> => {
     setIsProcessingOCR(true)
     setOcrProgress(0)
     setOcrText('')
@@ -285,6 +286,7 @@ export function FieldCapture() {
 
       setOcrText(text)
       const parsed = parseBusinessCardText(text)
+
       setParsedInfo(parsed)
 
       // Auto-fill form fields if parsing was successful
@@ -293,9 +295,11 @@ export function FieldCapture() {
       if (parsed.email) setEmail(parsed.email)
       if (parsed.phone) setPhone(parsed.phone)
 
+      return parsed
     } catch (error) {
       console.error('OCR processing failed:', error)
       alert('OCR processing failed. Please try again or enter details manually.')
+      return null
     } finally {
       setIsProcessingOCR(false)
       setOcrProgress(0)
@@ -382,6 +386,21 @@ export function FieldCapture() {
     }
   }
 
+  const handleCardUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string
+      setCapturedImage(dataUrl)
+      setParsedInfo(null)
+      setOcrText('')
+      processOCR(dataUrl)
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
   const stopCamera = () => {
     if (videoRef.current?.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream
@@ -422,7 +441,47 @@ export function FieldCapture() {
             createdAt,
           })
           setAudioNoteId(id)
-        } catch (error) {
+            const runOcr = async (img: string) => {
+              const { data: { text } } = await Tesseract.recognize(
+                img,
+                'eng',
+                {
+                  logger: (m: { status: string; progress: number }) => {
+                    if (m.status === 'recognizing text') {
+                      setOcrProgress(Math.round(m.progress * 100))
+                    }
+                  },
+                }
+              )
+              return text
+            }
+
+            // Pass 1: preprocessed image
+            let text = await runOcr(preprocessedImage)
+            let parsed = parseBusinessCardText(text)
+
+            // Fallback extraction for missing fields
+            const fallback = extractFallbackFields(text)
+            if (!parsed.email && fallback.email) parsed.email = fallback.email
+            if (!parsed.phone && fallback.phone) parsed.phone = fallback.phone
+            if (!parsed.name && fallback.name) parsed.name = fallback.name
+
+            // Pass 2: raw image if key fields still missing
+            if ((!parsed.name || !parsed.email || !parsed.phone) && imageDataUrl !== preprocessedImage) {
+              const rawText = await runOcr(imageDataUrl)
+              text = `${text}\n${rawText}`
+              const parsed2 = parseBusinessCardText(rawText)
+              const fallback2 = extractFallbackFields(rawText)
+              parsed = {
+                name: parsed.name || parsed2.name || fallback2.name,
+                company: parsed.company || parsed2.company,
+                email: parsed.email || parsed2.email || fallback2.email,
+                phone: parsed.phone || parsed2.phone || fallback2.phone,
+                title: parsed.title || parsed2.title,
+              }
+            }
+
+            setOcrText(text)
           console.error('Failed to save audio note to IndexedDB:', error)
         } finally {
           mediaRecorder.stream.getTracks().forEach((track) => track.stop())
@@ -493,17 +552,48 @@ export function FieldCapture() {
   }
 
   const handleSaveLead = async () => {
-    if (!name.trim()) return
+    if (isProcessingOCR) {
+      alert('Please wait, extracting info from the card...')
+      return
+    }
+
+    // If we have a card image but no parsed info and key fields missing, try OCR once before saving
+    if (capturedImage && !parsedInfo && (!name.trim() || !email.trim() || !phone.trim())) {
+      const parsed = await processOCR(capturedImage)
+      if (parsed) {
+        if (!name.trim() && parsed.name) setName(parsed.name)
+        if (!company.trim() && parsed.company) setCompany(parsed.company)
+        if (!email.trim() && parsed.email) setEmail(parsed.email)
+        if (!phone.trim() && parsed.phone) setPhone(parsed.phone)
+      }
+    }
+
+    // Validation: tags required
+    if (tags.length === 0) {
+      alert('Please select at least one tag before saving.')
+      return
+    }
+
+    // Validation: require either visiting card image OR all primary fields
+    const hasVisitingCard = Boolean(capturedImage)
+    const hasPrimaryFields = Boolean(name.trim() && email.trim() && phone.trim())
+    if (!hasVisitingCard && !hasPrimaryFields) {
+      alert('Add a visiting card image or fill name, email, and mobile number.')
+      return
+    }
+
     setSaving(true)
     const leadId = await addLead({
-      name: name.trim(),
+      name: name.trim() || 'Visitor',
       company: company.trim() || undefined,
       email: email.trim() || undefined,
-      phone: phone.trim() || undefined,
+      phone: phone.trim(),
       interest: note.trim() || undefined,
       audioTranscript: voskTranscript?.trim() || undefined,
-      tags,
+      audioNoteId: audioNoteId ?? undefined,
+      visitingCardImage: capturedImage || undefined,
       tagIds,
+      tags,
       source: 'field',
       stage: 'met',
     })
@@ -749,6 +839,14 @@ export function FieldCapture() {
                     <Camera className="w-6 h-6" />
                     Use Camera
                   </button>
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isProcessingOCR}
+                  >
+                    Upload Card Image
+                  </button>
                   
                   <button 
                     className="secondary" 
@@ -767,6 +865,13 @@ export function FieldCapture() {
 
       {mode === 'scan' && parsedInfo && (
         <form className="form" onSubmit={(e) => { e.preventDefault(); handleSaveLead() }}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleCardUpload}
+          />
           <div className="form-notice">
             <p>✨ Information auto-filled from visiting card. Please review and edit as needed:</p>
           </div>
@@ -963,4 +1068,36 @@ export function FieldCapture() {
       )}
     </section>
   )
+}
+
+// Fallback lightweight extractors for email/phone/name when primary parsing misses
+const extractFallbackFields = (text: string): ParsedBusinessCard => {
+  const result: ParsedBusinessCard = {}
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+
+  // Email
+  const emailMatch = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)
+  if (emailMatch) {
+    result.email = emailMatch[0].toLowerCase()
+  }
+
+  // Phone: pick the first 10-13 digit sequence
+  const digitRuns = text.match(/[+]?\d[\d\s().-]{7,}/g) || []
+  const cleaned = digitRuns
+    .map(run => run.replace(/\D/g, ''))
+    .filter(d => d.length >= 10 && d.length <= 13)
+  if (cleaned.length) {
+    result.phone = cleaned[0]
+  }
+
+  // Name: choose the first line with 2-4 words, mostly letters
+  for (const line of lines) {
+    const words = line.split(/\s+/)
+    if (words.length >= 2 && words.length <= 4 && /^[A-Za-z\s.'-]+$/.test(line)) {
+      result.name = line
+      break
+    }
+  }
+
+  return result
 }

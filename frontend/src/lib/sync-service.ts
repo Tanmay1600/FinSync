@@ -1,12 +1,21 @@
 import { api } from './api'
 import { db, type Lead } from './db'
-import { OfflineQueue, type QueuedOperation } from './offline-queue'
+import { OfflineQueue, offlineDB, type QueuedOperation } from './offline-queue'
+import { stallTagOptions } from '../data/stallTags'
+
+const CLOUDINARY_CONFIG = {
+  cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'dyl2ptmmp',
+  apiKey: import.meta.env.VITE_CLOUDINARY_API_KEY || '213394372734892',
+  apiSecret: import.meta.env.VITE_CLOUDINARY_API_SECRET || 'Qh6l_lYLhoAf6HsnGHUXLd4bUmI',
+}
 
 export class SyncService {
   private static instance: SyncService
   private queue: OfflineQueue
   private isOnline: boolean = navigator.onLine
   private listeners: Set<(isOnline: boolean) => void> = new Set()
+  private isSyncing: boolean = false
+  private geminiUnavailable: boolean = false
   
   static getInstance(): SyncService {
     if (!SyncService.instance) {
@@ -50,6 +59,13 @@ export class SyncService {
       return
     }
 
+    if (this.isSyncing) {
+      console.log('[Sync] Sync already in progress - skipping reentry')
+      return
+    }
+
+    this.isSyncing = true
+
     await this.queue.setSyncing(true)
     console.log('[Sync] Starting sync process')
 
@@ -68,12 +84,21 @@ export class SyncService {
         }
       }
 
+      // Remove any failed operations that exceeded retries
+      await this.queue.clearFailedOperations()
+
+      const remaining = await this.queue.getOperationCount()
+      if (remaining === 0) {
+        await this.clearLocalStoresAfterSync()
+      }
+
       await this.queue.setLastSync()
       console.log('[Sync] Sync completed successfully')
     } catch (error) {
       console.error('[Sync] Sync process failed:', error)
     } finally {
       await this.queue.setSyncing(false)
+      this.isSyncing = false
     }
   }
 
@@ -100,30 +125,110 @@ export class SyncService {
     const leadData = operation.payload as Omit<Lead, 'id' | 'createdAt' | 'updatedAt' | 'history' | 'pending'> & { localId: string }
     
     try {
-      // Create lead on server
-      const response = await api.createLead({
-        name: leadData.name,
-        company: leadData.company,
-        email: leadData.email,
-        phone: leadData.phone,
-        tags: leadData.tags,
-        source: leadData.source,
-        interest: leadData.interest
+      const tagIds = this.mapTagLabelsToIds(leadData.tags || [])
+
+      if (!tagIds.length) {
+        throw new Error('No tag IDs mapped for offline lead')
+      }
+      const isFieldLead = leadData.source === 'field'
+
+      let imageUrl: string | undefined
+      let audioUrl: string | undefined
+
+      if (isFieldLead && leadData.visitingCardImage) {
+        imageUrl = await this.uploadToCloudinary(leadData.visitingCardImage, 'field_cards')
+      }
+
+      if (isFieldLead && leadData.audioNoteId) {
+        const note = await db.audioNotes.get(leadData.audioNoteId)
+        if (note?.blob) {
+          audioUrl = await this.uploadToCloudinary(note.blob, 'field_audio')
+        }
+      }
+
+      const missingPrimary = !leadData.name || !leadData.email || !leadData.phone
+      const hasRichInputs = Boolean(imageUrl || audioUrl || leadData.audioTranscript || leadData.interest)
+
+      let finalName = leadData.name || 'Visitor'
+      let finalEmail = leadData.email
+      let finalPhone = leadData.phone || ''
+      let finalRemarks = leadData.interest
+
+      if (isFieldLead && missingPrimary && hasRichInputs) {
+        const geminiResult = await this.generateGeminiSummary({
+          name: leadData.name,
+          email: leadData.email,
+          phone: leadData.phone,
+          tags: leadData.tags,
+          notes: leadData.interest,
+          transcript: leadData.audioTranscript,
+          imageUrl,
+          imageDataUrl: leadData.visitingCardImage,
+          audioUrl,
+        })
+
+        if (geminiResult) {
+          if (!finalName && geminiResult.name) finalName = geminiResult.name
+          if (!finalEmail && geminiResult.email) finalEmail = geminiResult.email
+          if (!finalPhone && geminiResult.phone) finalPhone = geminiResult.phone
+          if (geminiResult.remarks) finalRemarks = geminiResult.remarks
+        }
+      }
+
+      if (!finalPhone) {
+        // Generate a unique numeric fallback to avoid duplicate-key failures
+        const digitsFromLocal = (leadData.pendingLocalId || leadData.localId || '').replace(/\D/g, '')
+        const tail = (digitsFromLocal || Date.now().toString()).slice(-9)
+        finalPhone = `9${tail}`.slice(0, 10)
+      }
+
+      if (!finalEmail) {
+        // Backend requires non-null email; synthesize a temp one based on phone/local id
+        const token = (finalPhone || leadData.pendingLocalId || Date.now().toString()).replace(/\W/g, '') || 'visitor'
+        finalEmail = `${token}@temp.email`
+      }
+
+      await api.createInteraction({
+        name: finalName,
+        mobNo: finalPhone,
+        email: finalEmail,
+        tagIds,
+        remarks: finalRemarks,
+        mode: isFieldLead ? 'field' : 'stall',
+        image_url: imageUrl,
+        audio_url: audioUrl,
       })
       
-      // Update local record with server ID and remove pending flag
-      const localLead = await db.leads.where('name').equals(leadData.name).first()
+      // Update local record (by pendingLocalId fallback to phone/email) and remove pending flag
+      let localLead = await db.leads
+        .filter((lead) => lead.pendingLocalId === leadData.localId)
+        .first()
+
+      if (!localLead && leadData.phone) {
+        localLead = await db.leads.where('phone').equals(leadData.phone).first()
+      }
+      if (!localLead && leadData.email) {
+        localLead = await db.leads.where('email').equals(leadData.email).first()
+      }
+
       if (localLead) {
         await db.leads.update(localLead.id!, {
           pending: false,
+          pendingLocalId: undefined,
           updatedAt: Date.now()
         })
       }
       
-      console.log(`[Sync] Lead created on server with ID: ${response.id}`)
+      console.log('[Sync] Lead created on server via interaction endpoint')
     } catch (error) {
       throw new Error(`Failed to create lead: ${error}`)
     }
+  }
+
+  private mapTagLabelsToIds(tags: string[]): number[] {
+    if (!tags || tags.length === 0) return []
+    const lookup = new Map(stallTagOptions.map((t) => [t.label, t.id]))
+    return tags.map((label) => lookup.get(label)).filter((id): id is number => typeof id === 'number')
   }
 
   private async syncUpdateLead(operation: QueuedOperation): Promise<void> {
@@ -174,6 +279,40 @@ export class SyncService {
     return localId
   }
 
+  async ensurePendingLeadsQueued(leads: Lead[]): Promise<void> {
+    const pendingLeads = leads.filter((l) => l.pending)
+    if (pendingLeads.length === 0) return
+
+    const queuedOps = await this.queue.getPendingOperations()
+
+    for (const lead of pendingLeads) {
+      const alreadyQueued = queuedOps.some((op) => {
+        const payload = op.payload as any
+        return (
+          payload?.localId === lead.pendingLocalId ||
+          (payload?.phone && lead.phone && payload.phone === lead.phone) ||
+          (payload?.email && lead.email && payload.email === lead.email)
+        )
+      })
+
+      if (alreadyQueued) continue
+
+      const queueId = await this.queueCreateLead({
+        name: lead.name,
+        company: lead.company,
+        email: lead.email,
+        phone: lead.phone,
+        tags: lead.tags,
+        source: lead.source,
+        interest: lead.interest,
+      })
+
+      if (lead.id) {
+        await db.leads.update(lead.id, { pendingLocalId: queueId })
+      }
+    }
+  }
+
   async queueUpdateStage(id: number, stage: Lead['stage']): Promise<string> {
     const localId = await this.queue.addOperation({
       type: 'UPDATE_STAGE',
@@ -200,6 +339,202 @@ export class SyncService {
     }
 
     return localId
+  }
+
+  private async uploadToCloudinary(input: Blob | string, folder: string): Promise<string | undefined> {
+    const { cloudName, apiKey, apiSecret } = CLOUDINARY_CONFIG
+    if (!cloudName || !apiKey || !apiSecret) {
+      console.warn('[Sync] Cloudinary config missing - skipping upload')
+      return undefined
+    }
+
+    try {
+      const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`
+      const formData = new FormData()
+
+      const file = typeof input === 'string' ? await this.dataUrlToBlob(input) : input
+
+      const timestamp = Math.floor(Date.now() / 1000)
+      const paramsToSign = folder ? `folder=${folder}&timestamp=${timestamp}` : `timestamp=${timestamp}`
+      const signature = await this.sha1Hex(`${paramsToSign}${apiSecret}`)
+
+      formData.append('file', file)
+      formData.append('api_key', apiKey)
+      formData.append('timestamp', String(timestamp))
+      formData.append('signature', signature)
+      if (folder) {
+        formData.append('folder', folder)
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data?.error?.message || 'Cloudinary upload failed')
+      }
+
+      return data.secure_url as string
+    } catch (error) {
+      console.error('[Sync] Cloudinary upload error:', error)
+      return undefined
+    }
+  }
+
+  private async dataUrlToBlob(dataUrl: string): Promise<Blob> {
+    const [meta, content] = dataUrl.split(',')
+    const isBase64 = meta.includes('base64')
+    const byteString = isBase64 ? atob(content) : decodeURIComponent(content)
+    const mimeMatch = meta.match(/data:(.*?);/)
+    const mimeType = mimeMatch ? mimeMatch[1] : 'application/octet-stream'
+    const ab = new ArrayBuffer(byteString.length)
+    const ia = new Uint8Array(ab)
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i)
+    }
+    return new Blob([ab], { type: mimeType })
+  }
+
+  private async sha1Hex(input: string): Promise<string> {
+    const encoder = new TextEncoder()
+    const data = encoder.encode(input)
+    const hashBuffer = await crypto.subtle.digest('SHA-1', data)
+    const hashArray = Array.from(new Uint8Array(hashBuffer))
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+    return hashHex
+  }
+
+  private async generateGeminiSummary(params: {
+    name?: string
+    email?: string
+    phone?: string
+    tags?: string[]
+    notes?: string
+    transcript?: string
+    imageUrl?: string
+    audioUrl?: string
+    imageDataUrl?: string
+  }): Promise<{ name?: string; email?: string; phone?: string; remarks?: string } | undefined> {
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+    if (!apiKey || this.geminiUnavailable) {
+      return undefined
+    }
+
+    const prompt = `You are extracting lead contact info from a business card image (inline) plus any notes/transcript. Return STRICT JSON with keys: name, email, phone, remarks. remarks <= 300 chars. Use null for any unknown field. Be conservative; don't hallucinate domains/phones.
+
+  Known partial data:
+  - name: ${params.name || 'null'}
+  - email: ${params.email || 'null'}
+  - phone: ${params.phone || 'null'}
+  - tags: ${(params.tags || []).join(', ') || 'none'}
+  - notes: ${params.notes || 'none'}
+  - transcript: ${params.transcript || 'none'}
+  - image_url: ${params.imageUrl || 'none'}
+  - audio_url: ${params.audioUrl || 'none'}
+
+  Respond ONLY with JSON.`
+
+    try {
+      // Use Gemini 2.5 Pro vision-capable endpoint (AI Studio)
+      const endpoints = [
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      ]
+
+      const parts: any[] = [{ text: prompt }]
+
+      // Inline image data if available (data URL)
+      if (params.imageDataUrl?.startsWith('data:')) {
+        const [meta, data] = params.imageDataUrl.split(',')
+        const mimeMatch = meta.match(/data:(.*?);/)
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/png'
+        parts.push({
+          inline_data: {
+            mime_type: mimeType,
+            data: data,
+          }
+        })
+      }
+
+      for (const base of endpoints) {
+        const url = `${base}?key=${apiKey}`
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts
+              }
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 256
+            }
+          })
+        })
+
+        if (response.status === 404) {
+          this.geminiUnavailable = true
+          continue
+        }
+
+        if (!response.ok) {
+          console.warn('[Sync] Gemini responded with status', response.status)
+          this.geminiUnavailable = true
+          continue
+        }
+
+        const data = await response.json()
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
+        if (typeof text === 'string') {
+          try {
+            const parsed = JSON.parse(text)
+            return {
+              name: parsed?.name ?? undefined,
+              email: parsed?.email ?? undefined,
+              phone: parsed?.phone ?? undefined,
+              remarks: parsed?.remarks ?? undefined,
+            }
+          } catch (err) {
+            // Try to find JSON substring
+            const match = text.match(/\{[\s\S]*\}/)
+            if (match) {
+              try {
+                const parsed = JSON.parse(match[0])
+                return {
+                  name: parsed?.name ?? undefined,
+                  email: parsed?.email ?? undefined,
+                  phone: parsed?.phone ?? undefined,
+                  remarks: parsed?.remarks ?? undefined,
+                }
+              } catch (e) {
+                console.warn('[Sync] Gemini response not JSON parsable')
+              }
+            }
+          }
+        }
+      }
+
+      return undefined
+    } catch (error) {
+      console.error('[Sync] Gemini summary failed:', error)
+      this.geminiUnavailable = true
+      return undefined
+    }
+  }
+
+  private async clearLocalStoresAfterSync(): Promise<void> {
+    await db.leads.clear()
+    await db.audioNotes.clear()
+    await offlineDB.operations.clear()
+    await offlineDB.syncStatus.clear()
+    console.log('[Sync] Cleared local IndexedDB caches after successful sync')
   }
 
   getOnlineStatus(): boolean {

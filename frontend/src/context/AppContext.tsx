@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { db, type Lead, type LeadStage } from '../lib/db'
+import { SyncService } from '../lib/sync-service'
 
 interface AppContextValue {
   leads: Lead[]
@@ -18,12 +19,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [isOnline, setIsOnline] = useState(navigator.onLine)
 
+  const syncService = SyncService.getInstance()
+
   useEffect(() => {
     const load = async () => {
       try {
         const all = await db.leads.orderBy('createdAt').reverse().toArray()
         setLeads(all)
         setLoading(false)
+
+        // Ensure any pending local leads are queued for sync
+        await syncService.ensurePendingLeadsQueued(all)
+
+        // If online, kick off a sync immediately
+        if (navigator.onLine) {
+          await syncService.syncPendingOperations()
+        }
       } catch (error) {
         console.error('Failed to load leads:', error)
         setLoading(false)
@@ -31,39 +42,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     load()
 
-    // Listen for online/offline events
-    const handleOnline = () => {
-      console.log('[AppContext] Network online')
-      setIsOnline(true)
-    }
-    const handleOffline = () => {
-      console.log('[AppContext] Network offline')
-      setIsOnline(false)
-    }
-    
-    window.addEventListener('online', handleOnline)
-    window.addEventListener('offline', handleOffline)
-    
-    // Periodic online check (every 30 seconds)
-    const onlineCheckInterval = setInterval(() => {
-      const currentStatus = navigator.onLine
-      setIsOnline(prev => {
-        if (currentStatus !== prev) {
-          console.log('[AppContext] Online status changed:', currentStatus)
-        }
-        return currentStatus
-      })
-    }, 30000)
-    
+    const unsubscribe = syncService.onNetworkChange((online) => {
+      setIsOnline(online)
+      if (online) {
+        syncService.syncPendingOperations()
+      }
+    })
+
     return () => {
-      window.removeEventListener('online', handleOnline)
-      window.removeEventListener('offline', handleOffline)
-      clearInterval(onlineCheckInterval)
+      unsubscribe()
     }
-  }, [])
+  }, [syncService])
 
   const addLead: AppContextValue['addLead'] = async (input) => {
     const now = Date.now()
+    const queueId = await syncService.queueCreateLead(input)
     const base: Lead = {
       ...input,
       createdAt: now,
@@ -75,6 +68,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         },
       ],
       pending: true,
+      pendingLocalId: queueId,
     }
 
     // Add to local database immediately (optimistic UI)
@@ -105,10 +99,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const syncLeads: AppContextValue['syncLeads'] = async () => {
-    // Simple sync - just clear pending flags for now
-    const pending = leads.filter((l) => l.pending)
-    await Promise.all(pending.map((l) => db.leads.update(l.id!, { pending: false })))
-    setLeads((prev) => prev.map((l) => ({ ...l, pending: false })))
+    await syncService.syncPendingOperations()
+
+    // Refresh local state after sync attempt
+    const all = await db.leads.orderBy('createdAt').reverse().toArray()
+    setLeads(all)
   }
 
   const value: AppContextValue = {

@@ -8,7 +8,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles,
   User,
-  Building2,
   Phone,
   ArrowRight,
   ArrowLeft,
@@ -16,19 +15,22 @@ import {
   QrCode,
   Camera,
   RotateCcw,
+  Tag,
+  MessageSquareText,
 } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { PageContainer } from '@/components/layout';
 import { cn } from '@/lib/utils';
+import { stallTagOptions } from '@/data/stallTags';
 
-type WizardStep = 'attract' | 'name' | 'contact' | 'company' | 'success';
+type WizardStep = 'attract' | 'name' | 'contact' | 'tags' | 'success';
 
 interface LeadFormData {
   name: string;
   email: string;
   phone: string;
-  company: string;
-  designation: string;
+  tags: string[];
+  remarks: string;
 }
 
 export function StallMode() {
@@ -37,10 +39,14 @@ export function StallMode() {
     name: '',
     email: '',
     phone: '',
-    company: '',
-    designation: '',
+    tags: [],
+    remarks: '',
   });
   const [countdown, setCountdown] = useState(5);
+  const [existingContacts, setExistingContacts] = useState<{ emails: string[]; phones: string[] }>({
+    emails: [],
+    phones: [],
+  });
 
   // Auto-reset after success
   useEffect(() => {
@@ -65,14 +71,14 @@ export function StallMode() {
       name: '',
       email: '',
       phone: '',
-      company: '',
-      designation: '',
+      tags: [],
+      remarks: '',
     });
     setCountdown(5);
   }, []);
 
   const handleNext = () => {
-    const steps: WizardStep[] = ['attract', 'name', 'contact', 'company', 'success'];
+    const steps: WizardStep[] = ['attract', 'name', 'contact', 'tags', 'success'];
     const currentIndex = steps.indexOf(step);
     if (currentIndex < steps.length - 1) {
       setStep(steps[currentIndex + 1]);
@@ -80,11 +86,28 @@ export function StallMode() {
   };
 
   const handleBack = () => {
-    const steps: WizardStep[] = ['attract', 'name', 'contact', 'company', 'success'];
+    const steps: WizardStep[] = ['attract', 'name', 'contact', 'tags', 'success'];
     const currentIndex = steps.indexOf(step);
     if (currentIndex > 0) {
       setStep(steps[currentIndex - 1]);
     }
+  };
+
+  const handleTagsSubmit = () => {
+    setExistingContacts((prev) => ({
+      emails: [...prev.emails, formData.email.trim().toLowerCase()],
+      phones: [...prev.phones, formData.phone.trim()],
+    }));
+    handleNext();
+  };
+
+  const handleToggleTag = (tag: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      tags: prev.tags.includes(tag)
+        ? prev.tags.filter((t) => t !== tag)
+        : [...prev.tags, tag],
+    }));
   };
 
   return (
@@ -119,16 +142,19 @@ export function StallMode() {
               onChangeEmail={(email) => setFormData({ ...formData, email })}
               onNext={handleNext}
               onBack={handleBack}
+              existingEmails={existingContacts.emails}
+              existingPhones={existingContacts.phones}
             />
           )}
-          {step === 'company' && (
-            <CompanyStep
-              key="company"
-              company={formData.company}
-              designation={formData.designation}
-              onChangeCompany={(company) => setFormData({ ...formData, company })}
-              onChangeDesignation={(designation) => setFormData({ ...formData, designation })}
-              onSubmit={handleNext}
+          {step === 'tags' && (
+            <TagsStep
+              key="tags"
+              tags={formData.tags}
+              remarks={formData.remarks}
+              onToggleTag={handleToggleTag}
+              onChangeRemarks={(remarks) => setFormData({ ...formData, remarks })}
+              availableTags={stallTagOptions}
+              onSubmit={handleTagsSubmit}
               onBack={handleBack}
             />
           )}
@@ -146,7 +172,7 @@ export function StallMode() {
       {/* Progress Indicator */}
       {step !== 'attract' && step !== 'success' && (
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-2">
-          {['name', 'contact', 'company'].map((s, index) => (
+          {['name', 'contact', 'tags'].map((s, index) => (
             <motion.div
               key={s}
               className={cn(
@@ -282,14 +308,14 @@ function NameStep({
           <User className="w-8 h-8 text-stall" />
         </div>
         <h2 className="text-3xl font-bold text-white mb-2">What's your name?</h2>
-        <p className="text-white/60">Let's start with a quick introduction</p>
+        <p className="text-white/60">Optional, but it helps us greet you better</p>
       </div>
 
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Enter your full name"
+        placeholder="Full name (optional)"
         autoFocus
         className={cn(
           'w-full h-20 px-8 text-2xl text-center',
@@ -314,7 +340,6 @@ function NameStep({
           variant="stall"
           size="xl"
           onClick={onNext}
-          disabled={!value.trim()}
           className="flex-1"
         >
           Continue
@@ -333,6 +358,8 @@ function ContactStep({
   onChangeEmail,
   onNext,
   onBack,
+  existingEmails,
+  existingPhones,
 }: {
   phone: string;
   email: string;
@@ -340,8 +367,17 @@ function ContactStep({
   onChangeEmail: (value: string) => void;
   onNext: () => void;
   onBack: () => void;
+  existingEmails: string[];
+  existingPhones: string[];
 }) {
   const [activeField, setActiveField] = useState<'phone' | 'email'>('phone');
+  const normalizedPhone = phone.trim();
+  const normalizedEmail = email.trim().toLowerCase();
+  const phoneValid = normalizedPhone.length === 10;
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
+  const emailDuplicate = normalizedEmail ? existingEmails.includes(normalizedEmail) : false;
+  const phoneDuplicate = normalizedPhone ? existingPhones.includes(normalizedPhone) : false;
+  const canContinue = phoneValid && emailValid && !emailDuplicate && !phoneDuplicate;
 
   const handleNumPadPress = (key: string) => {
     if (activeField === 'phone') {
@@ -365,7 +401,7 @@ function ContactStep({
           <Phone className="w-8 h-8 text-stall" />
         </div>
         <h2 className="text-3xl font-bold text-white mb-2">How can we reach you?</h2>
-        <p className="text-white/60">Phone number is required</p>
+        <p className="text-white/60">Email and phone are mandatory so we can follow up</p>
       </div>
 
       {/* Phone Input */}
@@ -399,7 +435,7 @@ function ContactStep({
         value={email}
         onChange={(e) => onChangeEmail(e.target.value)}
         onFocus={() => setActiveField('email')}
-        placeholder="Email (optional)"
+        placeholder="Work email"
         className={cn(
           'w-full h-14 px-6 text-lg text-center mb-6',
           'bg-surface-elevated border-2 border-border rounded-xl',
@@ -408,6 +444,21 @@ function ContactStep({
           'transition-all'
         )}
       />
+
+      <div className="space-y-1 text-sm">
+        {!phoneValid && (
+          <p className="text-white/70">Enter a 10-digit mobile number</p>
+        )}
+        {!emailValid && email.length > 0 && (
+          <p className="text-white/70">Enter a valid email address</p>
+        )}
+        {phoneDuplicate && (
+          <p className="text-error">This phone number is already registered at the stall</p>
+        )}
+        {emailDuplicate && (
+          <p className="text-error">This email is already registered at the stall</p>
+        )}
+      </div>
 
       {/* Number Pad */}
       {activeField === 'phone' && (
@@ -452,7 +503,7 @@ function ContactStep({
           variant="stall"
           size="xl"
           onClick={onNext}
-          disabled={phone.length !== 10}
+          disabled={!canContinue}
           className="flex-1"
         >
           Continue
@@ -463,21 +514,23 @@ function ContactStep({
   );
 }
 
-// Company Step
-function CompanyStep({
-  company,
-  designation,
-  onChangeCompany,
-  onChangeDesignation,
+// Tag selection + remarks
+function TagsStep({
+  tags,
+  remarks,
+  onToggleTag,
+  onChangeRemarks,
   onSubmit,
   onBack,
+  availableTags,
 }: {
-  company: string;
-  designation: string;
-  onChangeCompany: (value: string) => void;
-  onChangeDesignation: (value: string) => void;
+  tags: string[];
+  remarks: string;
+  onToggleTag: (tag: string) => void;
+  onChangeRemarks: (value: string) => void;
   onSubmit: () => void;
   onBack: () => void;
+  availableTags: typeof stallTagOptions;
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -499,37 +552,55 @@ function CompanyStep({
     >
       <div className="mb-8">
         <div className="w-16 h-16 mx-auto mb-6 rounded-2xl bg-stall/20 flex items-center justify-center">
-          <Building2 className="w-8 h-8 text-stall" />
+          <Tag className="w-8 h-8 text-stall" />
         </div>
-        <h2 className="text-3xl font-bold text-white mb-2">Where do you work?</h2>
-        <p className="text-white/60">Help us personalize your experience</p>
+        <h2 className="text-3xl font-bold text-white mb-2">What best describes your interest?</h2>
+        <p className="text-white/60">Tap the tags so we know how to follow up</p>
       </div>
 
-      <div className="space-y-4 mb-8">
-        <input
-          type="text"
-          value={company}
-          onChange={(e) => onChangeCompany(e.target.value)}
-          placeholder="Company name"
-          autoFocus
+      <div className="mb-8 text-left">
+        <div className="flex items-center justify-center gap-2 text-white mb-4">
+          <Tag className="w-5 h-5 text-stall" />
+          <span className="text-lg font-semibold">Select areas of interest (required)</span>
+        </div>
+        <div className="flex flex-wrap justify-center gap-3">
+          {availableTags.map((tagOption) => {
+            const isActive = tags.includes(tagOption.label);
+            return (
+              <button
+                key={tagOption.id}
+                type="button"
+                onClick={() => onToggleTag(tagOption.label)}
+                className={cn(
+                  'tag-pill',
+                  `tag-pill--${tagOption.color}`,
+                  isActive && 'active'
+                )}
+              >
+                {tagOption.label}
+              </button>
+            );
+          })}
+        </div>
+        {tags.length === 0 && (
+          <p className="text-center text-error text-sm mt-3">Please choose at least one tag.</p>
+        )}
+      </div>
+
+      <div className="mb-8">
+        <div className="flex items-center justify-center gap-2 text-white mb-4">
+          <MessageSquareText className="w-5 h-5 text-stall" />
+          <span className="text-lg font-semibold">Remarks (optional)</span>
+        </div>
+        <textarea
+          value={remarks}
+          onChange={(e) => onChangeRemarks(e.target.value)}
+          placeholder="Anything specific we should note?"
           className={cn(
-            'w-full h-16 px-6 text-xl text-center',
+            'w-full h-32 px-6 py-4 text-lg text-center',
             'bg-surface-elevated border-2 border-border rounded-2xl',
             'text-white placeholder:text-muted',
             'focus:outline-none focus:border-stall focus:ring-4 focus:ring-stall/20',
-            'transition-all'
-          )}
-        />
-        <input
-          type="text"
-          value={designation}
-          onChange={(e) => onChangeDesignation(e.target.value)}
-          placeholder="Your role (optional)"
-          className={cn(
-            'w-full h-14 px-6 text-lg text-center',
-            'bg-surface-elevated border-2 border-border rounded-xl',
-            'text-white placeholder:text-muted',
-            'focus:outline-none focus:border-stall focus:ring-2 focus:ring-stall/20',
             'transition-all'
           )}
         />
@@ -550,7 +621,7 @@ function CompanyStep({
           variant="stall"
           size="xl"
           onClick={handleSubmit}
-          disabled={!company.trim() || isSubmitting}
+          disabled={isSubmitting || tags.length === 0}
           isLoading={isSubmitting}
           className="flex-1"
         >
@@ -572,7 +643,8 @@ function SuccessScreen({
   countdown: number;
   onReset: () => void;
 }) {
-  const firstName = name.split(' ')[0];
+  const trimmedName = name.trim();
+  const firstName = trimmedName ? trimmedName.split(' ')[0] : null;
 
   return (
     <motion.div
@@ -604,7 +676,7 @@ function SuccessScreen({
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.2 }}
       >
-        Thanks, {firstName}! 🎉
+        {firstName ? `Thanks, ${firstName}! 🎉` : 'Thanks for stopping by! 🎉'}
       </motion.h2>
 
       <motion.p

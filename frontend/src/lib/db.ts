@@ -10,6 +10,10 @@ export interface Lead {
   company?: string
   interest?: string
   audioTranscript?: string
+  audioNoteId?: number
+  visitingCardImage?: string
+  audioUrl?: string
+  imageUrl?: string
   tagIds?: number[]
   tags: string[]
   source: 'stall' | 'field'
@@ -19,6 +23,8 @@ export interface Lead {
   history: LeadHistoryEntry[]
   /** For optimistic UI  true until persisted */
   pending?: boolean
+  /** Local queue identifier to reconcile with server sync */
+  pendingLocalId?: string
 }
 
 export interface LeadHistoryEntry {

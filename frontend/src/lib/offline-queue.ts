@@ -25,8 +25,15 @@ class OfflineQueueDB extends Dexie {
 
   constructor() {
     super('HTT_OfflineQueue')
+    // v1: initial schema (no retryCount index)
     this.version(1).stores({
       operations: '++id, type, timestamp, localId',
+      syncStatus: '++id, lastSync'
+    })
+
+    // v2: add retryCount index for efficient querying
+    this.version(2).stores({
+      operations: '++id, type, timestamp, localId, retryCount',
       syncStatus: '++id, lastSync'
     })
   }
@@ -63,8 +70,7 @@ export class OfflineQueue {
 
   async getPendingOperations(): Promise<QueuedOperation[]> {
     return await offlineDB.operations
-      .where('retryCount')
-      .belowOrEqual(3)
+      .filter((op) => op.retryCount <= op.maxRetries)
       .sortBy('timestamp')
   }
 
@@ -76,20 +82,25 @@ export class OfflineQueue {
   async incrementRetry(id: number, error?: string): Promise<void> {
     const operation = await offlineDB.operations.get(id)
     if (operation) {
-      await offlineDB.operations.update(id, { 
-        retryCount: operation.retryCount + 1,
-        error
-      })
+      const nextRetry = operation.retryCount + 1
+      if (nextRetry > operation.maxRetries) {
+        await offlineDB.operations.delete(id)
+      } else {
+        await offlineDB.operations.update(id, { 
+          retryCount: nextRetry,
+          error
+        })
+      }
     }
   }
 
   async clearFailedOperations(): Promise<void> {
-    await offlineDB.operations.where('retryCount').above(3).delete()
+    await offlineDB.operations.filter((op) => op.retryCount > op.maxRetries).delete()
     await this.updateSyncStatus()
   }
 
   async getOperationCount(): Promise<number> {
-    return await offlineDB.operations.count()
+    return await offlineDB.operations.filter((op) => op.retryCount <= op.maxRetries).count()
   }
 
   private async updateSyncStatus(): Promise<void> {

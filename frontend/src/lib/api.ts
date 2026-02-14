@@ -75,6 +75,17 @@ export interface LeadResponse {
   message?: string
 }
 
+export interface CreateInteractionInput {
+  name: string
+  mobNo: string
+  email?: string
+  tagIds: number[]
+  remarks?: string
+  mode?: 'stall' | 'field'
+  image_url?: string
+  audio_url?: string
+}
+
 class ApiService {
   private getAuthHeader(): HeadersInit {
     const token = localStorage.getItem('auth_token')
@@ -174,6 +185,48 @@ class ApiService {
 
     if (!response.ok) {
       throw new Error(data.error || 'Failed to create lead')
+    }
+
+    return data
+  }
+
+  // Interactions (used for stall sync)
+  async createInteraction(input: CreateInteractionInput): Promise<{ success: boolean; data?: any; error?: string }> {
+    const token = localStorage.getItem('auth_token')
+    if (!token) {
+      throw new Error('Not logged in: missing auth token')
+    }
+
+    const response = await fetch(`${API_BASE_URL}/interactions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeader(),
+      },
+      body: JSON.stringify({
+        ...input,
+        mode: input.mode || 'stall',
+      }),
+    })
+
+    let data: any = null
+    let text: string | undefined
+    try {
+      data = await response.json()
+    } catch (err) {
+      try {
+        text = await response.text()
+      } catch {}
+    }
+
+    if (!response.ok) {
+      const detail = data?.error || data?.message || text || response.statusText
+      console.error('[API] createInteraction failed', {
+        status: response.status,
+        detail,
+        body: data || text,
+      })
+      throw new Error(detail || 'Failed to create interaction')
     }
 
     return data
