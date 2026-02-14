@@ -2,12 +2,10 @@ import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { StallCapture } from './StallCapture'
 import { FieldCapture } from './FieldCapture'
-import { Dashboard } from './Dashboard'
 
 const tabs = [
   { id: 'stall', label: 'Stall Kiosk' },
   { id: 'field', label: 'Field Capture' },
-  { id: 'dashboard', label: 'Pipeline' },
 ] as const
 
 export type TabId = (typeof tabs)[number]['id']
@@ -54,7 +52,6 @@ export function Shell() {
       <main className="app-main">
         {active === 'stall' && <StallCapture />}
         {active === 'field' && <FieldCapture />}
-        {active === 'dashboard' && <Dashboard />}
       </main>
     </div>
   )
