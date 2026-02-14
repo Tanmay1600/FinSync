@@ -9,6 +9,10 @@ from utils.validators import (
     validate_website, validate_description
 )
 from services.email import email_service
+import base64
+import json
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
 
 SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this')
 
@@ -351,3 +355,90 @@ def verify_and_set_password(invite_token_str: str, password: str) -> tuple:
     except Exception as e:
         db.session.rollback()
         return False, None, None, None, f"Password setup failed: {str(e)}"
+AES_KEY = os.getenv("AES_KEY")
+
+
+def decrypt_aes_payload(encrypted_code: str) -> dict:
+    """
+    Decrypt AES encrypted payload.
+
+    Expected encrypted format:
+        base64(iv + ciphertext)
+
+    Returns:
+        dict payload
+    """
+
+    try:
+        raw = base64.b64decode(encrypted_code)
+
+        iv = raw[:16]
+        ciphertext = raw[16:]
+
+        key = base64.b64decode(AES_KEY)
+
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        decrypted = unpad(cipher.decrypt(ciphertext), AES.block_size)
+
+        return json.loads(decrypted.decode("utf-8"))
+
+    except Exception:
+        return None
+def login_with_encrypted_code(encrypted_code: str) -> tuple:
+    """
+    Login user using AES encrypted code containing mobile number.
+
+    Flow:
+        1. Decrypt AES payload
+        2. Extract mobile number
+        3. Find user
+        4. Generate JWT token
+
+    Expected decrypted payload:
+        {
+            "mobNo": "9876543210"
+        }
+
+    Returns:
+        (success, user_dict, organization_dict, token, error)
+    """
+
+    if not encrypted_code:
+        return False, None, None, None, "Encrypted code required"
+
+    try:
+        # ---------------- Decrypt ----------------
+        payload = decrypt_aes_payload(encrypted_code)
+
+        if not payload:
+            return False, None, None, None, "Invalid encrypted code"
+
+        mobno = payload.get("mobNo")
+
+        if not mobno:
+            return False, None, None, None, "Mobile number missing in payload"
+
+        # ---------------- Find User ----------------
+        user = User.query.filter_by(
+            mobno=mobno.strip()
+        ).first()
+
+        if not user:
+            return False, None, None, None, "User not found"
+
+        # ---------------- Organization ----------------
+        organization = Organization.query.get(user.orgId)
+
+        # ---------------- Generate Token ----------------
+        token = generate_token(user.id)
+
+        return (
+            True,
+            user.to_dict(),
+            organization.to_dict() if organization else None,
+            token,
+            None
+        )
+
+    except Exception as e:
+        return False, None, None, None, f"Encrypted login failed: {str(e)}"

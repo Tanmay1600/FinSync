@@ -1,7 +1,7 @@
 """Authentication routes"""
 from flask import request, jsonify
 from utils.validators import validate_required_fields
-from services.auth import register_user, login_user
+from services.auth import register_user, login_user , login_with_encrypted_code
 
 
 def auth_routes(blueprint):
@@ -142,6 +142,52 @@ def auth_routes(blueprint):
         if not success:
             return jsonify({'error': error}), 401
         
+        return jsonify({
+            'message': 'Login successful',
+            'user': user,
+            'organization': organization,
+            'token': token
+        }), 200
+    
+    @blueprint.route('/encrypted-login', methods=['POST'])
+    def encrypted_login():
+        """
+        Login user using AES encrypted code
+
+        Request JSON:
+        {
+            "code": "BASE64_AES_ENCRYPTED_STRING"
+        }
+
+        Response (200):
+        {
+            "message": "Login successful",
+            "user": {...},
+            "organization": {...},
+            "token": "eyJhbGc..."
+        }
+
+        Response (400/401):
+        {
+            "error": "error message"
+        }
+        """
+
+        data = request.get_json()
+
+        # Validate required fields
+        is_valid, error = validate_required_fields(data, ['code'])
+        if not is_valid:
+            return jsonify({'error': error}), 400
+
+        # Call service
+        success, user, organization, token, error = login_with_encrypted_code(
+            encrypted_code=data['code']
+        )
+
+        if not success:
+            return jsonify({'error': error}), 401
+
         return jsonify({
             'message': 'Login successful',
             'user': user,
