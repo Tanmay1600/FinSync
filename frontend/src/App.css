@@ -200,10 +200,59 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+.chip.chip-red {
+  border-color: rgba(127, 29, 29, 0.9);
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.chip.chip-yellow {
+  border-color: rgba(120, 53, 15, 0.9);
+  background: rgba(250, 204, 21, 0.18);
+  color: #fde68a;
+}
+
+.chip.chip-green {
+  border-color: rgba(6, 95, 70, 0.9);
+  background: rgba(34, 197, 94, 0.18);
+  color: #bbf7d0;
+}
+
+.chip.chip-grey {
+  border-color: rgba(55, 65, 81, 0.9);
+  background: rgba(75, 85, 99, 0.25);
+  color: #e5e7eb;
+}
+
 .chip.active {
   background: #22c55e;
   color: #022c22;
   border-color: transparent;
+}
+
+/* Tag color variants for Field/Text tags */
+.chip.active.chip-red {
+  background: #ef4444;
+  color: #450a0a;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+}
+
+.chip.active.chip-yellow {
+  background: #facc15;
+  color: #422006;
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.35);
+}
+
+.chip.active.chip-green {
+  background: #22c55e;
+  color: #022c22;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
+}
+
+.chip.active.chip-grey {
+  background: #4b5563;
+  color: #f9fafb;
+  box-shadow: 0 0 0 2px rgba(75, 85, 99, 0.45);
 }
 
 .hint-row {
@@ -456,6 +505,33 @@ button:disabled {
 
 .scan-interface, .audio-interface {
   margin: 1.5rem 0;
+}
+
+.mode-switch {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid #1f2937;
+}
+
+.mode-switch-btn {
+  border: none;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-switch-btn.active {
+  background: #0ea5e9;
+  color: #0f172a;
 }
 
 .camera-container {

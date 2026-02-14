@@ -9,6 +9,8 @@ export interface Lead {
   name: string
   company?: string
   interest?: string
+  audioTranscript?: string
+  tagIds?: number[]
   tags: string[]
   source: 'stall' | 'field'
   stage: LeadStage
@@ -29,16 +31,25 @@ export interface LeadHistoryEntry {
   }
 }
 
+export interface AudioNote {
+  id?: number
+  blob: Blob
+  mimeType: string
+  createdAt: number
+}
+
 const DB_NAME = 'FinSyncDB'
-const DB_VERSION = 2
+const DB_VERSION = 3
 
 export class FinSyncDexie extends Dexie {
   leads!: Table<Lead, number>
+  audioNotes!: Table<AudioNote, number>
 
   constructor() {
     super(DB_NAME)
     this.version(DB_VERSION).stores({
       leads: '++id, email, phone, name, createdAt, source, stage',
+      audioNotes: '++id, createdAt',
     })
   }
 }

@@ -3,8 +3,33 @@ import { useApp } from '../context/AppContext'
 import { ScanLine, Mic, FileText, Plus, Camera, Loader, MicOff } from 'lucide-react'
 import Tesseract from 'tesseract.js'
 import { useVoskSpeechRecognition } from '../hooks/useVoskSpeechRecognition'
+import { db } from '../lib/db'
 
-const TAG_OPTIONS = ['HNI', 'PMS', 'Channel partner', 'ESOP', 'Treasury']
+type TagColor = 'red' | 'yellow' | 'green' | 'grey'
+
+interface TagOption {
+  id: number
+  label: string
+  color: TagColor
+}
+
+const TAG_OPTIONS: TagOption[] = [
+  { id: 1, label: 'High Intent', color: 'red' },
+  { id: 2, label: 'Interested', color: 'red' },
+  { id: 3, label: 'Follow-up Needed', color: 'red' },
+  { id: 4, label: 'Call Tomorrow', color: 'red' },
+  { id: 5, label: 'Meeting Requested', color: 'red' },
+  { id: 6, label: 'Referred Lead', color: 'red' },
+  { id: 7, label: 'Exploring Options', color: 'yellow' },
+  { id: 8, label: 'Met at Stall', color: 'yellow' },
+  { id: 9, label: 'Networking Floor', color: 'yellow' },
+  { id: 10, label: 'Business Owner', color: 'yellow' },
+  { id: 11, label: 'HNI Client', color: 'green' },
+  { id: 12, label: 'Wealth Management', color: 'green' },
+  { id: 13, label: 'Tax Planning', color: 'green' },
+  { id: 14, label: 'Mutual Funds', color: 'green' },
+  { id: 15, label: 'Not Relevant', color: 'grey' },
+]
 
 type CaptureMode = 'scan' | 'audio' | 'text' | null
 type ViewState = 'initial' | 'mode-selection' | 'form'
@@ -18,7 +43,6 @@ interface ParsedBusinessCard {
 }
 
 export function FieldCapture() {
-  const { addLead } = useApp()
   const [viewState, setViewState] = useState<ViewState>('initial')
   const [mode, setMode] = useState<CaptureMode>(null)
   const [name, setName] = useState('')
@@ -26,6 +50,7 @@ export function FieldCapture() {
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [tags, setTags] = useState<string[]>([])
+    const [tagIds, setTagIds] = useState<number[]>([])
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   
@@ -38,6 +63,9 @@ export function FieldCapture() {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
   const [recordingTime, setRecordingTime] = useState(0)
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const [audioNoteId, setAudioNoteId] = useState<number | null>(null)
 
   // OCR state
   const [isProcessingOCR, setIsProcessingOCR] = useState(false)
@@ -57,6 +85,8 @@ export function FieldCapture() {
     resetTranscript: resetVoskTranscript,
     isLoading: isVoskLoading,
   } = useVoskSpeechRecognition()
+
+  const { addLead, appendHistory } = useApp()
 
   // Parse business card text to extract contact information
   const parseBusinessCardText = (text: string): ParsedBusinessCard => {
@@ -367,6 +397,62 @@ export function FieldCapture() {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  const startAudioRecording = async () => {
+    if (isRecording) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        try {
+          const blob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' })
+          setAudioBlob(blob)
+          const createdAt = Date.now()
+          const id = await db.audioNotes.add({
+            blob,
+            mimeType: blob.type || 'audio/webm',
+            createdAt,
+          })
+          setAudioNoteId(id)
+        } catch (error) {
+          console.error('Failed to save audio note to IndexedDB:', error)
+        } finally {
+          mediaRecorder.stream.getTracks().forEach((track) => track.stop())
+        }
+      }
+
+      mediaRecorder.start()
+      setIsRecording(true)
+      setRecordingTime(0)
+      const interval = setInterval(() => {
+        setRecordingTime((prev) => prev + 1)
+      }, 1000)
+      recordingIntervalRef.current = interval
+    } catch (error) {
+      console.error('Error starting audio recording:', error)
+      alert('Unable to access microphone for audio recording.')
+    }
+  }
+
+  const stopAudioRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+    setIsRecording(false)
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current)
+      recordingIntervalRef.current = null
+    }
+  }
+
   // Cleanup on unmount
   useEffect(() => {
     const intervalRef = recordingIntervalRef.current
@@ -374,6 +460,9 @@ export function FieldCapture() {
       stopCamera()
       if (intervalRef) {
         clearInterval(intervalRef)
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop()
       }
     }
   }, [])
@@ -390,24 +479,45 @@ export function FieldCapture() {
     }
   }, [mode, viewState])
 
-  const toggleTag = (tag: string) => {
-    setTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
+  const toggleTag = (tag: TagOption) => {
+    setTags((prev) =>
+      prev.includes(tag.label)
+        ? prev.filter((t) => t !== tag.label)
+        : [...prev, tag.label],
+    )
+    setTagIds((prev) =>
+      prev.includes(tag.id)
+        ? prev.filter((id) => id !== tag.id)
+        : [...prev, tag.id],
+    )
   }
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault()
+  const handleSaveLead = async () => {
     if (!name.trim()) return
     setSaving(true)
-    await addLead({
+    const leadId = await addLead({
       name: name.trim(),
       company: company.trim() || undefined,
       email: email.trim() || undefined,
       phone: phone.trim() || undefined,
       interest: note.trim() || undefined,
+      audioTranscript: voskTranscript?.trim() || undefined,
       tags,
+      tagIds,
       source: 'field',
       stage: 'met',
     })
+    if (leadId && (voskTranscript || audioNoteId !== null)) {
+      const timestamp = Date.now()
+      await appendHistory(leadId, {
+        type: 'voice-note',
+        timestamp,
+        payload: {
+          transcript: voskTranscript || undefined,
+          audioBlobRef: audioNoteId !== null ? String(audioNoteId) : undefined,
+        },
+      })
+    }
     setSaving(false)
     setName('')
     setCompany('')
@@ -419,6 +529,7 @@ export function FieldCapture() {
     setViewState('initial')
     setCapturedImage(null)
     setAudioBlob(null)
+    setAudioNoteId(null)
     setIsRecording(false)
     setRecordingTime(0)
     setIsProcessingOCR(false)
@@ -439,6 +550,7 @@ export function FieldCapture() {
     setViewState('initial')
     setCapturedImage(null)
     setAudioBlob(null)
+    setAudioNoteId(null)
     setIsRecording(false)
     setRecordingTime(0)
     setIsProcessingOCR(false)
@@ -468,54 +580,14 @@ export function FieldCapture() {
           <button 
             type="button" 
             className="create-capture-btn"
-            onClick={() => setViewState('mode-selection')}
+            onClick={() => {
+              setMode('text')
+              setViewState('form')
+            }}
           >
             <Plus className="create-icon" />
             <span className="create-title">Create New Lead</span>
             <span className="create-desc">Start capturing visitor information</span>
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  // Show mode selection screen
-  if (viewState === 'mode-selection') {
-    return (
-      <section className="panel">
-        <h2>Field – On-floor Capture</h2>
-        <p className="muted">
-          Choose how you'd like to capture lead information
-        </p>
-        <div className="capture-modes">
-          <button 
-            type="button" 
-            className="capture-mode-btn"
-            onClick={() => handleModeSelect('scan')}
-          >
-            <ScanLine className="mode-icon" />
-            <span className="mode-title">Scan Visiting Card</span>
-            <span className="mode-desc">Capture card details instantly</span>
-          </button>
-          
-          <button 
-            type="button" 
-            className="capture-mode-btn"
-            onClick={() => handleModeSelect('audio')}
-          >
-            <Mic className="mode-icon" />
-            <span className="mode-title">Record Audio</span>
-            <span className="mode-desc">Voice notes and conversation</span>
-          </button>
-          
-          <button 
-            type="button" 
-            className="capture-mode-btn"
-            onClick={() => handleModeSelect('text')}
-          >
-            <FileText className="mode-icon" />
-            <span className="mode-title">Add Textual Notes</span>
-            <span className="mode-desc">Manual text entry</span>
           </button>
         </div>
       </section>
@@ -539,6 +611,29 @@ export function FieldCapture() {
             {mode === 'audio' && 'Record conversation details and key points'}
             {mode === 'text' && 'Enter lead details manually'}
           </p>
+          <div className="mode-switch">
+            <button
+              type="button"
+              className={mode === 'scan' ? 'mode-switch-btn active' : 'mode-switch-btn'}
+              onClick={() => setMode('scan')}
+            >
+              Scan
+            </button>
+            <button
+              type="button"
+              className={mode === 'audio' ? 'mode-switch-btn active' : 'mode-switch-btn'}
+              onClick={() => setMode('audio')}
+            >
+              Audio
+            </button>
+            <button
+              type="button"
+              className={mode === 'text' ? 'mode-switch-btn active' : 'mode-switch-btn'}
+              onClick={() => setMode('text')}
+            >
+              Text
+            </button>
+          </div>
         </div>
       </div>
 
@@ -580,8 +675,12 @@ export function FieldCapture() {
                     Capture Card
                   </button>
                   
-                  <button className="secondary" onClick={resetForm}>
-                    Cancel
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => setMode('text')}
+                  >
+                    Done
                   </button>
                 </div>
               </>
@@ -653,7 +752,8 @@ export function FieldCapture() {
                   
                   <button 
                     className="secondary" 
-                    onClick={resetForm}
+                    type="button"
+                    onClick={() => setMode('text')}
                     disabled={isProcessingOCR}
                   >
                     Done
@@ -666,7 +766,7 @@ export function FieldCapture() {
       )}
 
       {mode === 'scan' && parsedInfo && (
-        <form className="form" onSubmit={onSubmit}>
+        <form className="form" onSubmit={(e) => { e.preventDefault(); handleSaveLead() }}>
           <div className="form-notice">
             <p>✨ Information auto-filled from visiting card. Please review and edit as needed:</p>
           </div>
@@ -692,11 +792,11 @@ export function FieldCapture() {
             {TAG_OPTIONS.map((tag) => (
               <button
                 type="button"
-                key={tag}
-                className={tags.includes(tag) ? 'chip active' : 'chip'}
+                key={tag.id}
+                className={`chip chip-${tag.color}${tags.includes(tag.label) ? ' active' : ''}`}
                 onClick={() => toggleTag(tag)}
               >
-                {tag}
+                {tag.label}
               </button>
             ))}
           </div>
@@ -768,9 +868,10 @@ export function FieldCapture() {
               {!isVoskListening && (
                 <button 
                   className="record-btn" 
-                  onClick={() => {
+                  onClick={async () => {
                     resetVoskTranscript()
-                    startVoskListening()
+                    await startVoskListening()
+                    await startAudioRecording()
                   }}
                   disabled={!isVoskReady || isVoskLoading}
                 >
@@ -779,24 +880,35 @@ export function FieldCapture() {
                 </button>
               )}
               {isVoskListening && (
-                <button className="stop-btn" onClick={stopVoskListening}>
+                <button
+                  className="stop-btn"
+                  onClick={() => {
+                    stopVoskListening()
+                    stopAudioRecording()
+                  }}
+                >
                   <MicOff className="w-6 h-6" />
                   Stop Transcription
                 </button>
               )}
-              
-              {/* Copy transcript to notes */}
-              {voskTranscript && (
-                <button 
-                  className="secondary" 
-                  onClick={() => setNote(prev => prev ? `${prev}\n${voskTranscript}` : voskTranscript)}
-                >
-                  Copy to Notes
-                </button>
-              )}
-
-              <button className="secondary" onClick={resetForm}>
-                Cancel
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => {
+                  stopVoskListening()
+                  stopAudioRecording()
+                  setMode('text')
+                }}
+              >
+                Done
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={saving}
+                onClick={handleSaveLead}
+              >
+                {saving ? 'Saving…' : 'Save lead'}
               </button>
             </div>
           </div>
@@ -804,7 +916,7 @@ export function FieldCapture() {
       )}
 
       {mode === 'text' && (
-        <form className="form" onSubmit={onSubmit}>
+        <form className="form" onSubmit={(e) => { e.preventDefault(); handleSaveLead() }}>
           <label>
             Name*
             <input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -827,11 +939,11 @@ export function FieldCapture() {
             {TAG_OPTIONS.map((tag) => (
               <button
                 type="button"
-                key={tag}
-                className={tags.includes(tag) ? 'chip active' : 'chip'}
+                key={tag.id}
+                className={`chip chip-${tag.color}${tags.includes(tag.label) ? ' active' : ''}`}
                 onClick={() => toggleTag(tag)}
               >
-                {tag}
+                {tag.label}
               </button>
             ))}
           </div>

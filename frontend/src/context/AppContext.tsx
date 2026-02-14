@@ -4,7 +4,7 @@ import { db, type Lead, type LeadStage } from '../lib/db'
 interface AppContextValue {
   leads: Lead[]
   loading: boolean
-  addLead: (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt' | 'history' | 'pending'>) => Promise<void>
+  addLead: (input: Omit<Lead, 'id' | 'createdAt' | 'updatedAt' | 'history' | 'pending'>) => Promise<number>
   updateStage: (id: number, stage: LeadStage) => Promise<void>
   appendHistory: (id: number, entry: Lead['history'][number]) => Promise<void>
   syncLeads: () => Promise<void>
@@ -80,6 +80,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Add to local database immediately (optimistic UI)
     const id = await db.leads.add(base)
     setLeads((prev) => [{ ...base, id }, ...prev])
+    return id
   }
 
   const updateStage: AppContextValue['updateStage'] = async (id, stage) => {
