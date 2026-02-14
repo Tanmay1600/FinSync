@@ -3,6 +3,7 @@ from flask import Blueprint
 from .auth_routes import auth_routes
 from .basic_routes import basic_routes
 from .invite_routes import invite_bp
+from .interaction_routes import interaction_bp
 
 
 def setup_routes(app):
@@ -22,3 +23,6 @@ def setup_routes(app):
     
     # Register invite blueprint
     app.register_blueprint(invite_bp)
+    
+    # Register interaction blueprint
+    app.register_blueprint(interaction_bp)
