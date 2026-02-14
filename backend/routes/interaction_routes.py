@@ -4,7 +4,10 @@ from services.auth import get_current_user
 from services.interaction import (
     add_interaction,
     get_all_leads,
-    get_all_interactions
+    get_all_interactions,
+    get_agents_for_lead,
+    change_lead_owner,
+    change_lead_state
 )
 
 from utils.validators import validate_required_fields
@@ -112,3 +115,83 @@ def fetch_interactions():
         return jsonify({"success": False, "error": error}), 500
 
     return jsonify({"success": True, "data": data}), 200
+
+
+# =====================================================
+# GET AGENTS FOR A LEAD
+# =====================================================
+@interaction_bp.route("/leads/<int:lead_id>/agents", methods=["GET"])
+def fetch_agents_for_lead(lead_id):
+    """Get all agents who have interacted with a lead (admin only)"""
+    
+    user, error_resp, status = get_user_from_request()
+    if not user:
+        return error_resp, status
+    
+    success, agents, error = get_agents_for_lead(user.id, lead_id)
+    
+    if not success:
+        status_code = 403 if "admin" in error else (404 if "not found" in error.lower() else 500)
+        return jsonify({"success": False, "error": error}), status_code
+    
+    return jsonify({"success": True, "data": agents}), 200
+
+
+# =====================================================
+# CHANGE LEAD OWNER
+# =====================================================
+@interaction_bp.route("/leads/<int:lead_id>/owner", methods=["PUT"])
+def update_lead_owner(lead_id):
+    """Change the owner of a lead (admin only)"""
+    
+    user, error_resp, status = get_user_from_request()
+    if not user:
+        return error_resp, status
+    
+    data = request.get_json() or {}
+    
+    # Validate required fields
+    if "new_owner_id" not in data:
+        return jsonify({
+            "success": False,
+            "error": "Missing required field: new_owner_id"
+        }), 400
+    
+    success, lead_data, error = change_lead_owner(user.id, lead_id, data.get("new_owner_id"))
+    
+    if not success:
+        status_code = 403 if "admin" in error else (404 if "not found" in error.lower() else 400)
+        return jsonify({"success": False, "error": error}), status_code
+    
+    return jsonify({"success": True, "data": lead_data}), 200
+
+
+# =====================================================
+# CHANGE LEAD STATE
+# =====================================================
+@interaction_bp.route("/leads/<int:lead_id>/state", methods=["PUT"])
+def update_lead_state(lead_id):
+    """Change the state of a lead (admin or lead owner)"""
+    
+    user, error_resp, status = get_user_from_request()
+    if not user:
+        return error_resp, status
+    
+    data = request.get_json() or {}
+    
+    # Validate required fields
+    if "state" not in data:
+        return jsonify({
+            "success": False,
+            "error": "Missing required field: state"
+        }), 400
+    
+    success, lead_data, error = change_lead_state(user.id, lead_id, data.get("state"))
+    
+    if not success:
+        # Determine appropriate status code
+        is_permission_error = "admin" in error or "owner" in error
+        status_code = 403 if is_permission_error else (404 if "not found" in error.lower() else 400)
+        return jsonify({"success": False, "error": error}), status_code
+    
+    return jsonify({"success": True, "data": lead_data}), 200

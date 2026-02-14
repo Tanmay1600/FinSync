@@ -4,6 +4,7 @@ from .auth_routes import auth_routes
 from .basic_routes import basic_routes
 from .invite_routes import invite_bp
 from .interaction_routes import interaction_bp
+from .admin_routes import admin_bp
 
 
 def setup_routes(app):
@@ -26,3 +27,4 @@ def setup_routes(app):
     
     # Register interaction blueprint
     app.register_blueprint(interaction_bp)
+    app.register_blueprint(admin_bp)

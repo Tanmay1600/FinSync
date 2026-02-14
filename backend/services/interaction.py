@@ -355,3 +355,171 @@ def get_all_interactions(user_id: int):
 
     except Exception as e:
         return False, None, str(e)
+
+
+# =========================================================
+# GET ALL AGENTS FOR A LEAD
+# =========================================================
+
+def get_agents_for_lead(user_id: int, lead_id: int) -> Tuple[bool, Optional[List[Dict]], Optional[str]]:
+    """
+    Get all agents who have interacted with a lead (for dropdown).
+    Only accessible to admins.
+    
+    Args:
+        user_id: ID of user making request
+        lead_id: ID of lead to get agents for
+    
+    Returns:
+        Tuple of (success, agents_list, error_message)
+    """
+    try:
+        # Check if user is admin
+        user = db.session.get(User, user_id)
+        if not user:
+            return False, None, "User not found"
+        
+        if user.role != "admin":
+            return False, None, "Only admins can view agents for a lead"
+        
+        # Check if lead exists
+        lead = db.session.get(Lead, lead_id)
+        if not lead:
+            return False, None, "Lead not found"
+        
+        # Check if lead belongs to admin's organization
+        if lead.orgId != user.orgId:
+            return False, None, "Lead not found in your organization"
+        
+        # Get all interactions for this lead
+        interactions = Interaction.query.filter_by(lead_id=lead_id).all()
+        
+        # Get unique agent IDs
+        agent_ids = list(set(interaction.agent_id for interaction in interactions))
+        
+        # Get agent details
+        agents = User.query.filter(User.id.in_(agent_ids)).filter_by(orgId=user.orgId).all()
+        
+        result = [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "email": agent.email,
+                "mobno": agent.mobno,
+                "role": agent.role
+            }
+            for agent in agents
+        ]
+        
+        return True, result, None
+    
+    except Exception as e:
+        db.session.rollback()
+        return False, None, f"Failed to get agents: {str(e)}"
+
+
+# =========================================================
+# CHANGE LEAD OWNER
+# =========================================================
+
+def change_lead_owner(user_id: int, lead_id: int, new_owner_id: int) -> Tuple[bool, Optional[Dict], Optional[str]]:
+    """
+    Change the owner of a lead to another agent.
+    Only accessible to admins.
+    
+    Args:
+        user_id: ID of user making request (must be admin)
+        lead_id: ID of lead to change owner for
+        new_owner_id: ID of new owner user
+    
+    Returns:
+        Tuple of (success, lead_data, error_message)
+    """
+    try:
+        # Check if user is admin
+        user = db.session.get(User, user_id)
+        if not user:
+            return False, None, "User not found"
+        
+        if user.role != "admin":
+            return False, None, "Only admins can change lead owner"
+        
+        # Check if lead exists
+        lead = db.session.get(Lead, lead_id)
+        if not lead:
+            return False, None, "Lead not found"
+        
+        # Check if lead belongs to admin's organization
+        if lead.orgId != user.orgId:
+            return False, None, "Lead not found in your organization"
+        
+        # Check if new owner exists and is in same organization
+        new_owner = db.session.get(User, new_owner_id)
+        if not new_owner:
+            return False, None, "New owner user not found"
+        
+        if new_owner.orgId != user.orgId:
+            return False, None, "New owner user not found in your organization"
+        
+        # Change owner
+        lead.ownerId = new_owner_id
+        db.session.commit()
+        
+        return True, lead.to_dict(), None
+    
+    except Exception as e:
+        db.session.rollback()
+        return False, None, f"Failed to change lead owner: {str(e)}"
+
+
+# =========================================================
+# CHANGE LEAD STATE
+# =========================================================
+
+def change_lead_state(user_id: int, lead_id: int, new_state: str) -> Tuple[bool, Optional[Dict], Optional[str]]:
+    """
+    Change the state of a lead.
+    Accessible to admins and the lead owner.
+    
+    Args:
+        user_id: ID of user making request (must be admin or lead owner)
+        lead_id: ID of lead to change state for
+        new_state: New state value (must be valid LeadState)
+    
+    Returns:
+        Tuple of (success, lead_data, error_message)
+    """
+    try:
+        # Check if user exists
+        user = db.session.get(User, user_id)
+        if not user:
+            return False, None, "User not found"
+        
+        # Check if lead exists
+        lead = db.session.get(Lead, lead_id)
+        if not lead:
+            return False, None, "Lead not found"
+        
+        # Check if lead belongs to user's organization
+        if lead.orgId != user.orgId:
+            return False, None, "Lead not found in your organization"
+        
+        # Check permission: user must be admin or lead owner
+        if user.role != "admin" and user.id != lead.ownerId:
+            return False, None, "Only admins or lead owner can change lead state"
+        
+        # Validate state
+        valid_states = [state.value for state in LeadState]
+        if new_state.upper() not in valid_states:
+            return False, None, f"Invalid state '{new_state}'. Allowed states: {', '.join(valid_states)}"
+        
+        # Change state
+        lead.state = LeadState[new_state.upper()]
+        db.session.commit()
+        
+        return True, lead.to_dict(), None
+    
+    except Exception as e:
+        db.session.rollback()
+        return False, None, f"Failed to change lead state: {str(e)}"
+

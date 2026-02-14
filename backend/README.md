@@ -874,6 +874,237 @@ CREATE TABLE user_tags (
 
 ---
 
+## 8. Get Agents for a Lead
+
+**Endpoint:** `GET /api/interactions/leads/{lead_id}/agents`
+
+**Description:** Get all agents who have interacted with a lead. Returns agent details for dropdown display. Admin only.
+
+**Authorization:** Requires admin JWT token in Authorization header
+
+**Request Headers:**
+```
+Authorization: Bearer <admin_jwt_token>
+```
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 5,
+      "name": "Jane Smith",
+      "email": "jane@example.com",
+      "mobno": "+1234567890",
+      "role": "agent"
+    },
+    {
+      "id": 6,
+      "name": "John Johnson",
+      "email": "john@example.com",
+      "mobno": "+0987654321",
+      "role": "agent"
+    }
+  ]
+}
+```
+
+**Error Response (403):**
+```json
+{
+  "success": false,
+  "error": "Only admins can view agents for a lead"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "success": false,
+  "error": "Lead not found"
+}
+```
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
+- User is not admin → 403
+- Lead not found → 404
+- Lead from different organization → 404
+- Server error → 500
+
+---
+
+## 9. Change Lead Owner
+
+**Endpoint:** `PUT /api/interactions/leads/{lead_id}/owner`
+
+**Description:** Change the owner (assigned agent) of a lead. Admin only.
+
+**Authorization:** Requires admin JWT token in Authorization header
+
+**Request Headers:**
+```
+Authorization: Bearer <admin_jwt_token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "new_owner_id": 5
+}
+```
+
+**Field Validation:**
+- `new_owner_id`: Required, must be a valid user ID in the same organization
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "name": "John Doe",
+    "email": "john@example.com",
+    "mobNo": "+1234567890",
+    "ownerId": 5,
+    "orgId": 1,
+    "state": "INTERACTION",
+    "created_at": "2026-02-14T10:30:00",
+    "updated_at": "2026-02-15T14:45:30"
+  }
+}
+```
+
+**Error Response (400):**
+```json
+{
+  "success": false,
+  "error": "Missing required field: new_owner_id"
+}
+```
+
+**Error Response (403):**
+```json
+{
+  "success": false,
+  "error": "Only admins can change lead owner"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "success": false,
+  "error": "Lead not found"
+}
+```
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
+- User is not admin → 403
+- Missing new_owner_id → 400
+- New owner user not found → 404
+- New owner from different organization → 404
+- Lead not found → 404
+- Lead from different organization → 404
+- Server error → 500
+
+---
+
+## 10. Change Lead State
+
+**Endpoint:** `PUT /api/interactions/leads/{lead_id}/state`
+
+**Description:** Change the state of a lead. Accessible to admins or the lead owner. State must be a valid LeadState enum value.
+
+**Authorization:** Requires JWT token in Authorization header (admin or lead owner)
+
+**Request Headers:**
+```
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "state": "FOLLOW_UP"
+}
+```
+
+**Valid States:**
+- INTERACTION
+- FOLLOW_UP
+- ENGAGED
+- MEETING
+- OUTCOME
+- CLOSED
+
+**Field Validation:**
+- `state`: Required, must be one of the valid states (case-insensitive)
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "name": "John Doe",
+    "email": "john@example.com",
+    "mobNo": "+1234567890",
+    "ownerId": 5,
+    "orgId": 1,
+    "state": "FOLLOW_UP",
+    "created_at": "2026-02-14T10:30:00",
+    "updated_at": "2026-02-15T15:00:00"
+  }
+}
+```
+
+**Error Response (400 - Invalid State):**
+```json
+{
+  "success": false,
+  "error": "Invalid state 'INVALID_STATE'. Allowed states: INTERACTION, FOLLOW_UP, ENGAGED, MEETING, OUTCOME, CLOSED"
+}
+```
+
+**Error Response (403 - Permission Denied):**
+```json
+{
+  "success": false,
+  "error": "Only admins or lead owner can change lead state"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "success": false,
+  "error": "Lead not found"
+}
+```
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
+- User is not admin and not lead owner → 403
+- Missing state field → 400
+- Invalid state value → 400 (with allowed states listed)
+- Lead not found → 404
+- Lead from different organization → 404
+- Missing state field → 400
+- Invalid state value → 400 (with allowed states listed)
+- Lead not found → 404
+- Lead from different organization → 404
+- Server error → 500
+
+---
+
 ## Testing with cURL
 
 ### Register
