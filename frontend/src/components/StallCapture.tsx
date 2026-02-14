@@ -9,13 +9,21 @@ export function StallCapture() {
   const [phone, setPhone] = useState('')
   const [remarks, setRemarks] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [tagIds, setTagIds] = useState<number[]>([])
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const toggleTag = (tag: string) => {
+  const toggleTag = (tag: typeof stallTagOptions[0]) => {
     setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+      prev.includes(tag.label)
+        ? prev.filter((t) => t !== tag.label)
+        : [...prev, tag.label],
+    )
+    setTagIds((prev) =>
+      prev.includes(tag.id)
+        ? prev.filter((id) => id !== tag.id)
+        : [...prev, tag.id],
     )
   }
 
@@ -59,6 +67,7 @@ export function StallCapture() {
       phone: sanitizedPhone,
       interest: remarks.trim() || undefined,
       tags: selectedTags,
+      tagIds,
       source: 'stall',
       stage: 'met',
     })
@@ -69,6 +78,7 @@ export function StallCapture() {
     setPhone('')
     setRemarks('')
     setSelectedTags([])
+    setTagIds([])
     setTimeout(() => setJustSaved(false), 2500)
   }
 
@@ -107,27 +117,17 @@ export function StallCapture() {
             placeholder="10-digit mobile"
           />
         </label>
-        <div className="tag-picker">
-          <div className="tag-picker__header">
-            <span>Interest tags*</span>
-            <span className="tag-picker__hint">Choose at least one</span>
-          </div>
-          <div className="tag-picker__grid">
-            {stallTagOptions.map((tagOption) => {
-              const active = selectedTags.includes(tagOption.label)
-              return (
-                <button
-                  type="button"
-                  key={tagOption.id}
-                  onClick={() => toggleTag(tagOption.label)}
-                  className={`tag-pill tag-pill--${tagOption.color}${active ? ' active' : ''}`}
-                  aria-pressed={active}
-                >
-                  {tagOption.label}
-                </button>
-              )
-            })}
-          </div>
+        <div className="chips">
+          {stallTagOptions.map((tag) => (
+            <button
+              type="button"
+              key={tag.id}
+              className={`chip chip-${tag.color}${selectedTags.includes(tag.label) ? ' active' : ''}`}
+              onClick={() => toggleTag(tag)}
+            >
+              {tag.label}
+            </button>
+          ))}
         </div>
         <label>
           Remarks (optional)

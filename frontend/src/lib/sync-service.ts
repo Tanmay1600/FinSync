@@ -146,34 +146,28 @@ export class SyncService {
         }
       }
 
-      const missingPrimary = !leadData.name || !leadData.email || !leadData.phone
-      const hasRichInputs = Boolean(imageUrl || audioUrl || leadData.audioTranscript || leadData.interest)
-
-      let finalName = leadData.name || 'Visitor'
-      let finalEmail = leadData.email
-      let finalPhone = leadData.phone || ''
+      let finalName: string | undefined
+      let finalEmail: string | undefined
+      let finalPhone: string | undefined
       let finalRemarks = leadData.interest
 
-      if (isFieldLead && missingPrimary && hasRichInputs) {
+      if (isFieldLead && leadData.visitingCardImage) {
         const geminiResult = await this.generateGeminiSummary({
-          name: leadData.name,
-          email: leadData.email,
-          phone: leadData.phone,
-          tags: leadData.tags,
-          notes: leadData.interest,
-          transcript: leadData.audioTranscript,
-          imageUrl,
           imageDataUrl: leadData.visitingCardImage,
-          audioUrl,
         })
 
         if (geminiResult) {
-          if (!finalName && geminiResult.name) finalName = geminiResult.name
-          if (!finalEmail && geminiResult.email) finalEmail = geminiResult.email
-          if (!finalPhone && geminiResult.phone) finalPhone = geminiResult.phone
+          finalName = geminiResult.name ?? finalName
+          finalEmail = geminiResult.email ?? finalEmail
+          finalPhone = geminiResult.phone ?? finalPhone
           if (geminiResult.remarks) finalRemarks = geminiResult.remarks
         }
       }
+
+      // Fallback to any captured fields only if Gemini did not provide them
+      if (!finalName) finalName = leadData.name || 'Visitor'
+      if (!finalEmail) finalEmail = leadData.email
+      if (!finalPhone) finalPhone = leadData.phone
 
       if (!finalPhone) {
         // Generate a unique numeric fallback to avoid duplicate-key failures
@@ -182,13 +176,28 @@ export class SyncService {
         finalPhone = `9${tail}`.slice(0, 10)
       }
 
+      // Clean phone: remove + and any non-digits, backend expects exactly 10 digits
+      if (finalPhone) {
+        finalPhone = finalPhone.replace(/\D/g, '').slice(-10)
+      }
+
       if (!finalEmail) {
         // Backend requires non-null email; synthesize a temp one based on phone/local id
         const token = (finalPhone || leadData.pendingLocalId || Date.now().toString()).replace(/\W/g, '') || 'visitor'
         finalEmail = `${token}@temp.email`
       }
 
-      await api.createInteraction({
+      console.log('[Sync] Sending to createInteraction:', {
+        name: finalName,
+        mobNo: finalPhone,
+        email: finalEmail,
+        tagIds,
+        mode: isFieldLead ? 'field' : 'stall',
+        hasImage: Boolean(imageUrl),
+        hasAudio: Boolean(audioUrl)
+      })
+
+      const result = await api.createInteraction({
         name: finalName,
         mobNo: finalPhone,
         email: finalEmail,
@@ -198,6 +207,8 @@ export class SyncService {
         image_url: imageUrl,
         audio_url: audioUrl,
       })
+
+      console.log('[Sync] createInteraction result:', result)
       
       // Update local record (by pendingLocalId fallback to phone/email) and remove pending flag
       let localLead = await db.leads
@@ -407,14 +418,6 @@ export class SyncService {
   }
 
   private async generateGeminiSummary(params: {
-    name?: string
-    email?: string
-    phone?: string
-    tags?: string[]
-    notes?: string
-    transcript?: string
-    imageUrl?: string
-    audioUrl?: string
     imageDataUrl?: string
   }): Promise<{ name?: string; email?: string; phone?: string; remarks?: string } | undefined> {
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY
@@ -422,99 +425,102 @@ export class SyncService {
       return undefined
     }
 
-    const prompt = `You are extracting lead contact info from a business card image (inline) plus any notes/transcript. Return STRICT JSON with keys: name, email, phone, remarks. remarks <= 300 chars. Use null for any unknown field. Be conservative; don't hallucinate domains/phones.
+  const prompt = `You are a data extractor. Your ONLY source of truth is the INLINE BUSINESS CARD IMAGE. Ignore any other inputs. Output STRICT JSON only.
 
-  Known partial data:
-  - name: ${params.name || 'null'}
-  - email: ${params.email || 'null'}
-  - phone: ${params.phone || 'null'}
-  - tags: ${(params.tags || []).join(', ') || 'none'}
-  - notes: ${params.notes || 'none'}
-  - transcript: ${params.transcript || 'none'}
-  - image_url: ${params.imageUrl || 'none'}
-  - audio_url: ${params.audioUrl || 'none'}
+Schema: {"name": string|null, "email": string|null, "phone": string|null, "remarks": string|null}.
 
-  Respond ONLY with JSON.`
+Rules:
+- "remarks" is a brief summary from the card, <= 120 chars.
+- "phone" must be digits with optional leading '+'.
+- If a field is absent on the card, set it to null. Do not guess or invent.
+- Use exact text from the card.
+
+Return ONLY the JSON, no prose, no code fences.`
 
     try {
       // Use Gemini 2.5 Pro vision-capable endpoint (AI Studio)
       const endpoints = [
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+        'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent',
       ]
-
-      const parts: any[] = [{ text: prompt }]
 
       // Inline image data if available (data URL)
       if (params.imageDataUrl?.startsWith('data:')) {
         const [meta, data] = params.imageDataUrl.split(',')
         const mimeMatch = meta.match(/data:(.*?);/)
         const mimeType = mimeMatch ? mimeMatch[1] : 'image/png'
-        parts.push({
-          inline_data: {
-            mime_type: mimeType,
-            data: data,
-          }
-        })
-      }
-
-      for (const base of endpoints) {
-        const url = `${base}?key=${apiKey}`
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts
+        
+        for (const base of endpoints) {
+          const url = `${base}?key=${apiKey}`
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: data,
+                    }
+                  }
+                ]
+              }],
+              generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: 1024
               }
-            ],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 256
-            }
+            })
           })
-        })
 
-        if (response.status === 404) {
-          this.geminiUnavailable = true
-          continue
-        }
+          if (response.status === 404 || response.status === 403) {
+            this.geminiUnavailable = true
+            console.warn(`[Sync] Gemini responded with status ${response.status}. Disabling for this session.`)
+            continue
+          }
 
-        if (!response.ok) {
-          console.warn('[Sync] Gemini responded with status', response.status)
-          this.geminiUnavailable = true
-          continue
-        }
+          if (!response.ok) {
+            const errorBody = await response.text()
+            console.error('[Sync] Gemini error response:', {
+              status: response.status,
+              statusText: response.statusText,
+              body: errorBody
+            })
+            continue
+          }
 
-        const data = await response.json()
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text
-        if (typeof text === 'string') {
-          try {
-            const parsed = JSON.parse(text)
-            return {
-              name: parsed?.name ?? undefined,
-              email: parsed?.email ?? undefined,
-              phone: parsed?.phone ?? undefined,
-              remarks: parsed?.remarks ?? undefined,
-            }
-          } catch (err) {
-            // Try to find JSON substring
-            const match = text.match(/\{[\s\S]*\}/)
-            if (match) {
-              try {
-                const parsed = JSON.parse(match[0])
-                return {
-                  name: parsed?.name ?? undefined,
-                  email: parsed?.email ?? undefined,
-                  phone: parsed?.phone ?? undefined,
-                  remarks: parsed?.remarks ?? undefined,
+          const responseData = await response.json()
+          console.log('[Sync] Gemini raw response:', responseData)
+          const text = responseData?.candidates?.[0]?.content?.parts?.[0]?.text
+          console.log('[Sync] Gemini extracted text:', text)
+          if (typeof text === 'string') {
+            try {
+              const parsed = JSON.parse(text)
+              console.log('[Sync] Gemini parsed JSON:', parsed)
+              return {
+                name: parsed?.name ?? undefined,
+                email: parsed?.email ?? undefined,
+                phone: parsed?.phone ?? undefined,
+                remarks: parsed?.remarks ?? undefined,
+              }
+            } catch (err) {
+              // Try to find JSON substring
+              const match = text.match(/\{[\s\S]*\}/)
+              if (match) {
+                try {
+                  const parsed = JSON.parse(match[0])
+                  console.log('[Sync] Gemini parsed JSON (from substring):', parsed)
+                  return {
+                    name: parsed?.name ?? undefined,
+                    email: parsed?.email ?? undefined,
+                    phone: parsed?.phone ?? undefined,
+                    remarks: parsed?.remarks ?? undefined,
+                  }
+                } catch (e) {
+                  console.warn('[Sync] Gemini response not JSON parsable')
                 }
-              } catch (e) {
-                console.warn('[Sync] Gemini response not JSON parsable')
               }
             }
           }
