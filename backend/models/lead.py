@@ -31,7 +31,7 @@ class Lead(db.Model):
 
     interactions = db.relationship(
         'Interaction',
-        backref=db.backref('lead', lazy=True),
+        back_populates='lead',
         cascade='all, delete-orphan'
     )
 

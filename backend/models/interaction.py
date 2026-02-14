@@ -28,13 +28,25 @@ class Interaction(db.Model):
 
     audio_note_url = db.Column(db.Text, nullable=True)
     image_url = db.Column(db.Text, nullable=True)
-
+    
     # calculated positivity score
     score = db.Column(db.Integer, default=0)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    
     # relationships
+    agent = db.relationship(
+        "User",
+        backref="interactions",
+        lazy=True
+    )
+
+    lead = db.relationship(
+        "Lead",
+        back_populates="interactions",
+        lazy=True
+    )
+    
     tags = db.relationship(
         'InteractionTag',
         backref=db.backref('interaction', lazy=True),

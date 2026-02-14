@@ -1,11 +1,19 @@
 """Interaction service with business logic"""
+
 from database import db
 from models import Interaction, InteractionTag, Lead, Tag, User
 from models.all_enums import LeadState
-from utils.validators import validate_email, validate_phone, validate_name
+
+from utils.validators import validate_phone, validate_name
+
 from typing import List, Tuple, Optional, Dict
 from sqlalchemy.orm import joinedload
-from sqlalchemy import desc
+from sqlalchemy import desc, func
+
+
+# =========================================================
+# ADD INTERACTION
+# =========================================================
 def add_interaction(
     agent_id: int,
     name: str,
@@ -17,90 +25,61 @@ def add_interaction(
     remarks: Optional[str] = None,
     mode: str = "field"
 ) -> Tuple[bool, Optional[Dict], Optional[str]]:
-    """
-    Add/Update interaction for a lead. Creates lead if not exists, otherwise updates or creates based on conditions.
-    
-    Logic:
-    1. Check if lead exists by mobNo and orgId (from agent's org)
-    2. If NOT EXISTS:
-       - Create interaction with tags
-       - Create lead with ownerId=agentId, orgId=user.orgId, state=interaction
-    3. If EXISTS (lead found):
-       - If userId == ownerId: Update the latest interaction with provided fields (tags, score, image_url, audio_url, remarks)
-       - Else if state == interaction: Create new interaction (check score for owner update)
-       - Else (state != interaction): Create new interaction with message, no owner change
-    
-    Args:
-        agent_id: ID of agent adding interaction (from JWT token)
-        name: Lead name
-        mobNo: Lead mobile number
-        tagIds: List of tag IDs for scoring (optional, required only for creation)
-        email: Lead email (optional)
-        image_url: Interaction image URL (optional)
-        audio_url: Interaction audio URL (optional)
-        remarks: Interaction remarks (optional)
-    
-    Returns:
-        Tuple of (success, interaction_data, error_message)
-    """
-    
+
     try:
-        # Get agent user to access orgId
         agent = User.query.get(agent_id)
         if not agent:
             return False, None, "Agent user not found"
-        
-        # Validate required fields
+
+        # ---------------- Validation ----------------
         is_valid, error = validate_name(name)
         if not is_valid:
             return False, None, error
-        
+
         is_valid, error = validate_phone(mobNo)
         if not is_valid:
             return False, None, error
+
         if mode not in ["stall", "field"]:
             return False, None, "Invalid mode"
+
+        # ---------------- Find Lead ----------------
         lead = Lead.query.filter_by(
             mobNo=mobNo.strip(),
             orgId=agent.orgId
         ).first()
-        
-        # Check if tagIds is required for new lead creation
+
         if not lead and not tagIds:
-            return False, None, "tagIds is required when creating a new lead"
-        
-        # Validate tagIds (optional but if provided must be non-empty)
-        new_score = 0
+            return False, None, "tagIds required when creating new lead"
+
+        # ---------------- Tags + Score ----------------
         tags = []
+        new_score = 0
+
         if tagIds:
-            if not isinstance(tagIds, list) or len(tagIds) == 0:
-                return False, None, "tagIds must be a non-empty array"
-            
-            # Fetch all tags and calculate score
             tags = Tag.query.filter(Tag.id.in_(tagIds)).all()
+
             if len(tags) != len(tagIds):
-                return False, None, "One or more tag IDs are invalid"
-            
+                return False, None, "Invalid tagIds"
+
             new_score = sum(tag.score for tag in tags)
-        
-        # Check if lead exists
-        
-        
-        # ===== CASE 1: Lead does not exist =====
+
+        # =================================================
+        # CASE 1 — LEAD DOES NOT EXIST
+        # =================================================
         if not lead:
-            # Create new lead
+
             lead = Lead(
                 name=name.strip(),
-                email=email.strip() if email else f"{mobNo.strip()}@temp.email",
+                email=email.strip() if email else None,
                 mobNo=mobNo.strip(),
                 ownerId=agent_id,
                 orgId=agent.orgId,
                 state=LeadState.INTERACTION
             )
             db.session.add(lead)
-            db.session.flush()  # Get lead ID
-            
-            # Create interaction
+            db.session.flush()
+
             interaction = Interaction(
                 lead_id=lead.id,
                 agent_id=agent_id,
@@ -110,140 +89,111 @@ def add_interaction(
                 remarks=remarks,
                 score=new_score
             )
+
             db.session.add(interaction)
             db.session.flush()
-            
-            # Create interaction tags
-            for tag in tags:
-                interaction_tag = InteractionTag(
+
+            db.session.add_all([
+                InteractionTag(
                     interaction_id=interaction.id,
                     tag_id=tag.id
-                )
-                db.session.add(interaction_tag)
-            
+                ) for tag in tags
+            ])
+
             db.session.commit()
-            
             return True, interaction.to_dict(), None
-        
-        # After lead check, check again if tagIds required for creation
-        if agent_id != lead.ownerId and lead.state.value != 'INTERACTION' and not tagIds:
-            return False, None, "tagIds is required for creating new interactions"
-        
-        # ===== CASE 2: Lead exists =====
-        
-        # Sub-case 2a: userId == ownerId → Update existing interaction (only provided fields)
+
+        # =================================================
+        # CASE 2 — OWNER UPDATES LAST INTERACTION
+        # =================================================
         if agent_id == lead.ownerId:
-            # Get the latest interaction for this lead
-            last_interaction = Interaction.query.filter_by(
-                lead_id=lead.id
-            ).order_by(Interaction.created_at.desc()).first()
-            
+
+            last_interaction = (
+                Interaction.query
+                .filter_by(lead_id=lead.id)
+                .order_by(desc(Interaction.created_at))
+                .first()
+            )
+
             if last_interaction:
-                # Update fields that are present in request
-                
-                # Update tags if provided
+
                 if tagIds:
-                    # Delete old tags for this interaction
-                    InteractionTag.query.filter_by(interaction_id=last_interaction.id).delete()
-                    
-                    # Add new tags
-                    for tag in tags:
-                        interaction_tag = InteractionTag(
+                    InteractionTag.query.filter_by(
+                        interaction_id=last_interaction.id
+                    ).delete()
+
+                    db.session.add_all([
+                        InteractionTag(
                             interaction_id=last_interaction.id,
                             tag_id=tag.id
-                        )
-                        db.session.add(interaction_tag)
-                    
-                    # Update score
+                        ) for tag in tags
+                    ])
+
                     last_interaction.score = new_score
-                
-                # Update other fields if provided
+
                 if image_url is not None:
                     last_interaction.image_url = image_url
-                
+
                 if audio_url is not None:
                     last_interaction.audio_note_url = audio_url
-                
+
                 if remarks is not None:
                     last_interaction.remarks = remarks
-                
+
                 db.session.commit()
-                
                 return True, last_interaction.to_dict(), None
-            else:
-                # No previous interaction, create one if tagIds provided
-                if not tagIds:
-                    return False, None, "No existing interaction and tagIds not provided for creating new interaction"
-                
-                interaction = Interaction(
-                    lead_id=lead.id,
-                    agent_id=agent_id,
-                    mode=mode,
-                    image_url=image_url,
-                    audio_note_url=audio_url,
-                    remarks=remarks,
-                    score=new_score
-                )
-                db.session.add(interaction)
-                db.session.flush()
-                
-                # Create interaction tags
-                for tag in tags:
-                    interaction_tag = InteractionTag(
-                        interaction_id=interaction.id,
-                        tag_id=tag.id
-                    )
-                    db.session.add(interaction_tag)
-                
-                db.session.commit()
-                
-                return True, interaction.to_dict(), None
-        
-        # Sub-case 2b: state != interaction (still create interaction, but cannot change owner)
-        if lead.state.value != LeadState.INTERACTION:
-            # Create interaction anyway, just don't change owner
+
+        # =================================================
+        # CASE 3 — OWNER LOCKED (STATE != INTERACTION)
+        # =================================================
+        if lead.state != LeadState.INTERACTION:
+
             interaction = Interaction(
                 lead_id=lead.id,
                 agent_id=agent_id,
-                mode=mode,  # Default mode
+                mode=mode,
                 image_url=image_url,
                 audio_note_url=audio_url,
                 remarks=remarks,
                 score=new_score
             )
+
             db.session.add(interaction)
             db.session.flush()
-            
-            # Create interaction tags
-            for tag in tags:
-                interaction_tag = InteractionTag(
+
+            db.session.add_all([
+                InteractionTag(
                     interaction_id=interaction.id,
                     tag_id=tag.id
-                )
-                db.session.add(interaction_tag)
-            
+                ) for tag in tags
+            ])
+
             db.session.commit()
-            
-            # Return success with message that owner couldn't be changed
+
             result = interaction.to_dict()
-            result['message'] = f"Interaction added successfully. Lead state is {lead.state.value}, owner cannot be changed."
+            result["message"] = "Owner locked due to lead state"
             return True, result, None
-        
-        # Sub-case 2b: state == interaction
-        # Get previous interaction
-        previous_interaction = Interaction.query.filter_by(
-            lead_id=lead.id,
-            agent_id=lead.ownerId
-        ).order_by(Interaction.created_at.desc()).first()
-        
-        previous_score = previous_interaction.score if previous_interaction else 0
-        
-        # Check if new score > previous_score + 5
-        if new_score > (previous_score + 5):
-            # Update lead owner
+
+        # =================================================
+        # CASE 4 — OWNERSHIP SCORING (CORRECT LOGIC)
+        # =================================================
+        owner_score = db.session.query(
+            func.coalesce(func.sum(Interaction.score), 0)
+        ).filter(
+            Interaction.lead_id == lead.id,
+            Interaction.agent_id == lead.ownerId
+        ).scalar()
+
+        agent_score = db.session.query(
+            func.coalesce(func.sum(Interaction.score), 0)
+        ).filter(
+            Interaction.lead_id == lead.id,
+            Interaction.agent_id == agent_id
+        ).scalar()
+
+        if agent_score > owner_score + 5:
             lead.ownerId = agent_id
-        
-        # Create interaction
+
         interaction = Interaction(
             lead_id=lead.id,
             agent_id=agent_id,
@@ -253,47 +203,36 @@ def add_interaction(
             remarks=remarks,
             score=new_score
         )
+
         db.session.add(interaction)
         db.session.flush()
-        
-        # Create interaction tags
-        for tag in tags:
-            interaction_tag = InteractionTag(
+
+        db.session.add_all([
+            InteractionTag(
                 interaction_id=interaction.id,
                 tag_id=tag.id
-            )
-            db.session.add(interaction_tag)
-        
+            ) for tag in tags
+        ])
+
         db.session.commit()
-        
+
         return True, interaction.to_dict(), None
-    
+
     except Exception as e:
         db.session.rollback()
-        return False, None, f"Failed to add interaction: {str(e)}"
-    
-from typing import Tuple, List, Dict
-from sqlalchemy.orm import joinedload
-from sqlalchemy import desc
-
-from models import Lead, Interaction, InteractionTag, User
+        return False, None, str(e)
 
 
-def get_all_leads(user_id: int) -> Tuple[bool, List[Dict], str]:
-    """
-    Get leads based on role:
-    - agent → owned leads
-    - admin → all org leads
-    """
+# =========================================================
+# GET ALL LEADS (ROLE BASED)
+# =========================================================
+def get_all_leads(user_id: int):
 
     try:
         user = User.query.get(user_id)
         if not user:
             return False, None, "User not found"
 
-        # ---------------------------------------------------
-        # Role-based filtering
-        # ---------------------------------------------------
         query = Lead.query
 
         if user.role == "admin":
@@ -304,8 +243,10 @@ def get_all_leads(user_id: int) -> Tuple[bool, List[Dict], str]:
         leads = (
             query.options(
                 joinedload(Lead.interactions)
-                .joinedload(Interaction.tags)
-                .joinedload(InteractionTag.tag)
+                    .joinedload(Interaction.agent),
+                joinedload(Lead.interactions)
+                    .joinedload(Interaction.tags)
+                    .joinedload(InteractionTag.tag)
             )
             .order_by(desc(Lead.created_at))
             .all()
@@ -316,40 +257,33 @@ def get_all_leads(user_id: int) -> Tuple[bool, List[Dict], str]:
         for lead in leads:
             lead_dict = lead.to_dict()
 
-            # only latest interaction
-            latest_interaction = None
-            if lead.interactions:
-                latest_interaction = max(
-                    lead.interactions,
-                    key=lambda x: x.created_at
-                )
-
-            lead_dict["interaction"] = (
-                latest_interaction.to_dict()
-                if latest_interaction else None
+            latest = (
+                max(lead.interactions, key=lambda x: x.created_at)
+                if lead.interactions else None
             )
 
+            if latest:
+                interaction_data = latest.to_dict()
+
+                interaction_data["agent"] = (
+                    latest.agent.to_dict()
+                    if latest.agent else None
+                )
+            else:
+                interaction_data = None
+
+            lead_dict["interaction"] = interaction_data
             result.append(lead_dict)
 
         return True, result, None
 
     except Exception as e:
-        return False, None, f"Failed to fetch leads: {str(e)}"
-    
+        return False, None, str(e)
 
-from typing import Tuple, List, Dict
-from sqlalchemy.orm import joinedload
-from sqlalchemy import desc
-
-from models import Interaction, InteractionTag, Lead, User
-
-
-def get_all_interactions(user_id: int) -> Tuple[bool, List[Dict], str]:
-    """
-    Get interactions based on role:
-    - agent → own interactions
-    - admin → all org interactions
-    """
+# =========================================================
+# GET ALL INTERACTIONS (ROLE BASED)
+# =========================================================
+def get_all_interactions(user_id: int):
 
     try:
         user = User.query.get(user_id)
@@ -358,11 +292,11 @@ def get_all_interactions(user_id: int) -> Tuple[bool, List[Dict], str]:
 
         query = Interaction.query
 
-        # ---------------------------------------------------
-        # Role-based filtering
-        # ---------------------------------------------------
         if user.role == "admin":
-            query = query.join(Lead).filter(
+            query = query.join(
+                Lead,
+                Interaction.lead_id == Lead.id
+            ).filter(
                 Lead.orgId == user.orgId
             )
         else:
@@ -372,8 +306,10 @@ def get_all_interactions(user_id: int) -> Tuple[bool, List[Dict], str]:
 
         interactions = (
             query.options(
+                joinedload(Interaction.agent),
+                joinedload(Interaction.lead),
                 joinedload(Interaction.tags)
-                .joinedload(InteractionTag.tag)
+                    .joinedload(InteractionTag.tag)
             )
             .order_by(desc(Interaction.created_at))
             .all()
@@ -382,16 +318,23 @@ def get_all_interactions(user_id: int) -> Tuple[bool, List[Dict], str]:
         result = []
 
         for interaction in interactions:
-            interaction_dict = interaction.to_dict()
+            data = interaction.to_dict()
 
-            # ensure no sensitive fields ever leak
-            interaction_dict.pop("email", None)
-            interaction_dict.pop("mobNo", None)
+            # agent info
+            data["agent"] = (
+                interaction.agent.to_dict()
+                if interaction.agent else None
+            )
 
-            result.append(interaction_dict)
+            # only lead name
+            data["lead_name"] = (
+                interaction.lead.name
+                if interaction.lead else None
+            )
+
+            result.append(data)
 
         return True, result, None
 
     except Exception as e:
-        return False, None, f"Failed to fetch interactions: {str(e)}"
-
+        return False, None, str(e)
