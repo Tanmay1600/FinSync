@@ -1,21 +1,27 @@
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
 import { Users, Activity, Clock, TrendingUp, Camera, Mic, FileText, Plus, ArrowRight, X } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
+import { AdminDashboard } from './AdminDashboard'
+import { AgentDashboard } from './AgentDashboard'
 
 interface HomeProps {
   onNavigate: (tab: 'stall' | 'field') => void
 }
 
 export function Home({ onNavigate }: HomeProps) {
+  const { user } = useAuth()
   const { leads } = useApp()
   const online = typeof navigator !== 'undefined' ? navigator.onLine : true
   const pending = leads.filter((l) => l.pending).length
   const recentLeads = leads.slice(0, 3)
   const [showFabMenu, setShowFabMenu] = useState(false)
   const fabRef = useRef<HTMLDivElement>(null)
-
+  
   // Close menu when clicking outside
   useEffect(() => {
+    if (user) return // Skip for authenticated users
+    
     function handleClickOutside(event: MouseEvent) {
       if (fabRef.current && !fabRef.current.contains(event.target as Node)) {
         setShowFabMenu(false)
@@ -29,7 +35,18 @@ export function Home({ onNavigate }: HomeProps) {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showFabMenu])
+  }, [showFabMenu, user])
+  
+  // If user is authenticated, show role-based dashboard
+  if (user) {
+    if (user.role === 'admin') {
+      return <AdminDashboard onNavigate={onNavigate} />
+    } else {
+      return <AgentDashboard onNavigate={onNavigate} />
+    }
+  }
+
+  // Original home screen for non-authenticated users
 
   const stats = {
     total: leads.length,

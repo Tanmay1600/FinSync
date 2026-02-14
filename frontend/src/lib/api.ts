@@ -75,6 +75,88 @@ export interface LeadResponse {
   message?: string
 }
 
+// Tag interface
+export interface Tag {
+  id: number
+  text: string
+  color: string
+  score: number
+  created_at: string
+}
+
+// InteractionTag interface
+export interface InteractionTag {
+  id: number
+  tag_id: number
+  tag: Tag
+  created_at: string
+}
+
+// Agent interface
+export interface Agent {
+  id: number
+  name: string
+  email: string
+  mobno: string
+  orgId: number
+  role: string
+  created_at: string
+  updated_at: string
+}
+
+// Interaction interface
+export interface Interaction {
+  id: number
+  lead_id: number
+  agent_id: number
+  agent: Agent
+  mode: string
+  remarks: string | null
+  audio_note_url: string | null
+  image_url: string | null
+  score: number
+  tags: InteractionTag[]
+  created_at: string
+  lead_name?: string
+}
+
+// Lead interface
+export interface Lead {
+  id: number
+  name: string
+  email: string
+  mobNo: string
+  ownerId: number
+  orgId: number
+  state: string
+  created_at: string
+  updated_at: string
+  interaction?: Interaction
+}
+
+export interface LeadsResponse {
+  success: boolean
+  data: Lead[]
+}
+
+export interface InteractionsResponse {
+  success: boolean
+  data: Interaction[]
+}
+
+export interface AgentSummary {
+  name: string
+  email: string
+  mobNo: string
+  no_of_interactions: number
+  no_of_leads: number
+}
+
+export interface AgentSummaryResponse {
+  success: boolean
+  data: AgentSummary[]
+}
+
 class ApiService {
   private getAuthHeader(): HeadersInit {
     const token = localStorage.getItem('auth_token')
@@ -249,6 +331,63 @@ class ApiService {
     } catch {
       return false
     }
+  }
+
+  // Get all leads (filtered by role)
+  async getAllLeads(): Promise<LeadsResponse> {
+    const response = await fetch(`${API_BASE_URL}/interactions/leads`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeader(),
+      },
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to fetch leads')
+    }
+
+    return data
+  }
+
+  // Get all interactions (filtered by role)
+  async getAllInteractions(): Promise<InteractionsResponse> {
+    const response = await fetch(`${API_BASE_URL}/interactions/all`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeader(),
+      },
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to fetch interactions')
+    }
+
+    return data
+  }
+
+  // Get all agents summary (admin only)
+  async getAllAgents(): Promise<AgentSummaryResponse> {
+    const response = await fetch(`${API_BASE_URL}/admin/agents-summary`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeader(),
+      },
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to fetch agents')
+    }
+
+    return data
   }
 }
 
