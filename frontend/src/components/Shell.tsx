@@ -17,10 +17,9 @@ export type TabId = (typeof tabs)[number]['id'] | 'home'
 export function Shell() {
   const [active, setActive] = useState<TabId>('home')
   const [showProfileMenu, setShowProfileMenu] = useState(false)
-  const { leads, syncLeads } = useApp()
+  const { leads, syncLeads, isOnline } = useApp()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const online = typeof navigator !== 'undefined' ? navigator.onLine : true
   const pending = leads.filter((l) => l.pending).length
 
   const handleLogout = () => {
@@ -40,10 +39,10 @@ export function Shell() {
         </div>
         <div className="header-right">
           <div className="status">
-            <span className={`dot ${online ? 'online' : 'offline'}`} />
-            <span className="status-text">{online ? 'Online' : 'Offline – local only'}</span>
+            <span className={`dot ${isOnline ? 'online' : 'offline'}`} />
+            <span className="status-text">{isOnline ? 'Online' : 'Offline – local only'}</span>
             {pending > 0 && (
-              <button className="secondary" onClick={syncLeads} disabled={!online}>
+              <button className="secondary" onClick={syncLeads} disabled={!isOnline}>
                 Sync {pending}
               </button>
             )}
