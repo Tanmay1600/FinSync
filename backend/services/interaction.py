@@ -3,9 +3,9 @@ from database import db
 from models import Interaction, InteractionTag, Lead, Tag, User
 from models.all_enums import LeadState
 from utils.validators import validate_email, validate_phone, validate_name
-from typing import Tuple, Optional, Dict
-
-
+from typing import List, Tuple, Optional, Dict
+from sqlalchemy.orm import joinedload
+from sqlalchemy import desc
 def add_interaction(
     agent_id: int,
     name: str,
@@ -271,3 +271,127 @@ def add_interaction(
     except Exception as e:
         db.session.rollback()
         return False, None, f"Failed to add interaction: {str(e)}"
+    
+from typing import Tuple, List, Dict
+from sqlalchemy.orm import joinedload
+from sqlalchemy import desc
+
+from models import Lead, Interaction, InteractionTag, User
+
+
+def get_all_leads(user_id: int) -> Tuple[bool, List[Dict], str]:
+    """
+    Get leads based on role:
+    - agent → owned leads
+    - admin → all org leads
+    """
+
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return False, None, "User not found"
+
+        # ---------------------------------------------------
+        # Role-based filtering
+        # ---------------------------------------------------
+        query = Lead.query
+
+        if user.role == "admin":
+            query = query.filter(Lead.orgId == user.orgId)
+        else:
+            query = query.filter(Lead.ownerId == user_id)
+
+        leads = (
+            query.options(
+                joinedload(Lead.interactions)
+                .joinedload(Interaction.tags)
+                .joinedload(InteractionTag.tag)
+            )
+            .order_by(desc(Lead.created_at))
+            .all()
+        )
+
+        result = []
+
+        for lead in leads:
+            lead_dict = lead.to_dict()
+
+            # only latest interaction
+            latest_interaction = None
+            if lead.interactions:
+                latest_interaction = max(
+                    lead.interactions,
+                    key=lambda x: x.created_at
+                )
+
+            lead_dict["interaction"] = (
+                latest_interaction.to_dict()
+                if latest_interaction else None
+            )
+
+            result.append(lead_dict)
+
+        return True, result, None
+
+    except Exception as e:
+        return False, None, f"Failed to fetch leads: {str(e)}"
+    
+
+from typing import Tuple, List, Dict
+from sqlalchemy.orm import joinedload
+from sqlalchemy import desc
+
+from models import Interaction, InteractionTag, Lead, User
+
+
+def get_all_interactions(user_id: int) -> Tuple[bool, List[Dict], str]:
+    """
+    Get interactions based on role:
+    - agent → own interactions
+    - admin → all org interactions
+    """
+
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return False, None, "User not found"
+
+        query = Interaction.query
+
+        # ---------------------------------------------------
+        # Role-based filtering
+        # ---------------------------------------------------
+        if user.role == "admin":
+            query = query.join(Lead).filter(
+                Lead.orgId == user.orgId
+            )
+        else:
+            query = query.filter(
+                Interaction.agent_id == user_id
+            )
+
+        interactions = (
+            query.options(
+                joinedload(Interaction.tags)
+                .joinedload(InteractionTag.tag)
+            )
+            .order_by(desc(Interaction.created_at))
+            .all()
+        )
+
+        result = []
+
+        for interaction in interactions:
+            interaction_dict = interaction.to_dict()
+
+            # ensure no sensitive fields ever leak
+            interaction_dict.pop("email", None)
+            interaction_dict.pop("mobNo", None)
+
+            result.append(interaction_dict)
+
+        return True, result, None
+
+    except Exception as e:
+        return False, None, f"Failed to fetch interactions: {str(e)}"
+

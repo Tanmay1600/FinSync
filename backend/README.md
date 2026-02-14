@@ -550,7 +550,13 @@ Authorization: Bearer <agent_jwt_token>
    - If new score > (previous score + 5): Updates lead owner to current agentId
    - Creates interaction
 
-3. **Lead Exists with state != 'interaction':**
+3. **Lead Exists with state == 'interaction' and userId != ownerId:**
+   - Updates the latest interaction with provided fields (tagIds, image_url, audio_url, remarks)
+   - Only updates score if tagIds are provided
+   - Other fields updated only if present in request
+   - No new interaction created, existing one is modified
+
+4. **Lead Exists with state != 'interaction':**
    - Creates interaction anyway (does not throw error)
    - Adds interaction tags
    - Returns interaction data with message indicating owner cannot be changed
@@ -568,6 +574,158 @@ Authorization: Bearer <agent_jwt_token>
 - Invalid email format → 400
 - Invalid phone format → 400
 - Invalid tag IDs → 404
+- Server error → 500
+
+---
+
+### 6. Get All Leads
+
+**Endpoint:** `GET /api/interactions/leads`
+
+**Description:** Retrieve all leads based on user role. Agents see only their owned leads, admins see all organization leads.
+
+**Authorization:** Requires JWT token in Authorization header
+
+**Request Headers:**
+```
+Authorization: Bearer <jwt_token>
+```
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "John Doe",
+      "email": "john@example.com",
+      "mobNo": "+1234567890",
+      "ownerId": 5,
+      "orgId": 1,
+      "state": "INTERACTION",
+      "created_at": "2026-02-14T10:30:00",
+      "updated_at": "2026-02-14T10:30:00",
+      "interaction": {
+        "id": 1,
+        "lead_id": 1,
+        "agent_id": 5,
+        "mode": "field",
+        "remarks": "Customer interested",
+        "audio_note_url": "https://...",
+        "image_url": "https://...",
+        "score": 12,
+        "tags": [
+          {
+            "id": 1,
+            "tag_id": 1,
+            "tag": {
+              "id": 1,
+              "text": "Interested",
+              "color": "green",
+              "score": 5
+            },
+            "created_at": "2026-02-14T10:30:00"
+          }
+        ],
+        "created_at": "2026-02-14T10:30:00"
+      }
+    }
+  ]
+}
+```
+
+**Role-based Behavior:**
+- **Agent:** Returns only leads assigned to them (ownerId = agent.id)
+- **Admin:** Returns all leads in their organization (orgId = agent.orgId)
+
+**Error Response (401):**
+```json
+{
+  "success": false,
+  "error": "Invalid or expired token"
+}
+```
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
+- Server error → 500
+
+---
+
+### 7. Get All Interactions
+
+**Endpoint:** `GET /api/interactions/all`
+
+**Description:** Retrieve all interactions based on user role. Agents see only their own interactions, admins see all organization interactions.
+
+**Authorization:** Requires JWT token in Authorization header
+
+**Request Headers:**
+```
+Authorization: Bearer <jwt_token>
+```
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "lead_id": 1,
+      "agent_id": 5,
+      "mode": "field",
+      "remarks": "Customer interested",
+      "audio_note_url": "https://...",
+      "image_url": "https://...",
+      "score": 15,
+      "tags": [
+        {
+          "id": 1,
+          "tag_id": 1,
+          "tag": {
+            "id": 1,
+            "text": "Interested",
+            "color": "green",
+            "score": 5
+          },
+          "created_at": "2026-02-14T10:30:00"
+        },
+        {
+          "id": 2,
+          "tag_id": 2,
+          "tag": {
+            "id": 2,
+            "text": "Qualified",
+            "color": "blue",
+            "score": 10
+          },
+          "created_at": "2026-02-14T10:30:00"
+        }
+      ],
+      "created_at": "2026-02-14T10:30:00"
+    }
+  ]
+}
+```
+
+**Role-based Behavior:**
+- **Agent:** Returns only their own interactions (agent_id = user.id)
+- **Admin:** Returns all interactions in their organization (joined with leads where orgId = admin.orgId)
+
+**Error Response (401):**
+```json
+{
+  "success": false,
+  "error": "Invalid or expired token"
+}
+```
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
 - Server error → 500
 
 ---
