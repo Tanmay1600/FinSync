@@ -425,6 +425,153 @@ Content-Type: application/json
 
 ---
 
+## 5. Add Interaction
+
+**Endpoint:** `POST /api/interactions`
+
+**Description:** Agent adds an interaction for a lead. Creates lead if not exists, updates lead owner if new interaction score is higher. Interaction score is calculated from selected tags.
+
+**Authorization:** Requires JWT token from agent user in Authorization header
+
+**Request Headers:**
+```
+Content-Type: application/json
+Authorization: Bearer <agent_jwt_token>
+```
+
+**Request Body:**
+```json
+{
+  "name": "John Doe",
+  "mobNo": "+1234567890",
+  "email": "john@example.com",
+  "image_url": "https://example.com/image.jpg",
+  "audio_url": "https://example.com/audio.mp3",
+  "tagIds": [1, 2, 3],
+  "remarks": "Customer showed interest in product"
+}
+```
+
+**Field Validation:**
+- `name`: Required, 2-120 characters
+- `mobNo`: Required, 7-20 characters (digits, +, -, (), spaces allowed), unique per organization
+- `email`: Optional, valid email format
+- `image_url`: Optional, URL format
+- `audio_url`: Optional, URL format
+- `tagIds`: Required, non-empty array of tag IDs
+- `remarks`: Optional, text field
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 5,
+    "lead_id": 3,
+    "agent_id": 5,
+    "mode": "field",
+    "remarks": "Customer showed interest in product",
+    "audio_note_url": "https://example.com/audio.mp3",
+    "image_url": "https://example.com/image.jpg",
+    "score": 15,
+    "tags": [
+      {
+        "id": 1,
+        "tag_id": 1,
+        "tag": {
+          "id": 1,
+          "text": "Interested",
+          "color": "green",
+          "score": 5
+        },
+        "created_at": "2026-02-14T10:30:00"
+      }
+    ],
+    "created_at": "2026-02-14T10:30:00"
+  }
+}
+```
+
+**Error Response (400):**
+```json
+{
+  "success": false,
+  "error": "Missing required fields: tagIds"
+}
+```
+
+**Error Response (401):**
+```json
+{
+  "success": false,
+  "error": "Invalid or expired token"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "success": false,
+  "error": "One or more tag IDs are invalid"
+}
+```
+
+**Success Response with Owner Not Changed (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 5,
+    "lead_id": 3,
+    "agent_id": 5,
+    "mode": "field",
+    "remarks": "Customer showed interest in product",
+    "audio_note_url": "https://example.com/audio.mp3",
+    "image_url": "https://example.com/image.jpg",
+    "score": 15,
+    "tags": [...],
+    "created_at": "2026-02-14T10:30:00",
+    "message": "Interaction added successfully. Lead state is qualified, owner cannot be changed."
+  }
+}
+```
+
+**Behavior Logic:**
+
+1. **Lead Does Not Exist:**
+   - Creates new lead with ownerId=agentId
+   - Sets state='interaction'
+   - Creates interaction with calculated score from tags
+   - Adds interaction tags
+
+2. **Lead Exists with state='interaction':**
+   - Fetches previous interaction from same owner
+   - Calculates new score from selected tags
+   - If new score > (previous score + 5): Updates lead owner to current agentId
+   - Creates interaction
+
+3. **Lead Exists with state != 'interaction':**
+   - Creates interaction anyway (does not throw error)
+   - Adds interaction tags
+   - Returns interaction data with message indicating owner cannot be changed
+   - **No lead owner update** (state is locked)
+
+**Score Calculation:**
+- Score = Sum of selected tag scores
+- Example: If tags [1, 2, 3] have scores [5, 7, 3], total score = 15
+- Lead owner changes only if new score exceeds previous score + 5
+
+**Error Cases:**
+- Missing authorization token → 401
+- Invalid JWT token → 401
+- Missing required fields → 400
+- Invalid email format → 400
+- Invalid phone format → 400
+- Invalid tag IDs → 404
+- Server error → 500
+
+---
+
 ## Basic Endpoints
 
 ### 1. Health Check
@@ -596,6 +743,21 @@ curl -X POST http://localhost:5000/api/auth/login \
 ### Health Check
 ```bash
 curl http://localhost:5000/api/health
+```
+
+### Add Interaction
+```bash
+curl -X POST http://localhost:5000/api/interactions \
+  -H "Authorization: Bearer <agent_jwt_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "John Doe",
+    "mobNo": "+1234567890",
+    "email": "john@example.com",
+    "tagIds": [1, 2, 3],
+    "remarks": "Customer interested",
+    "image_url": "https://example.com/image.jpg"
+  }'
 ```
 
 ---
