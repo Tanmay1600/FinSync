@@ -406,6 +406,7 @@ def get_agents_for_lead(user_id: int, lead_id: int) -> Tuple[bool, Optional[List
         
         result = [
             {
+           
                 "id": agent.id,
                 "name": agent.name,
                 "email": agent.email,

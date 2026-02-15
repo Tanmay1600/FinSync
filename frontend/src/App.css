@@ -2822,6 +2822,49 @@ button:disabled {
   table-layout: auto !important;
   min-width: 1000px;
 }
+.owner-cell {
+  position: relative;
+}
+
+.owner-hover-wrapper {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.owner-name {
+  font-weight: 500;
+}
+
+.owner-dropdown {
+  position: absolute;
+  top: 120%;
+  left: 0;
+  min-width: 160px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  z-index: 9999;
+  padding: 6px 0;
+}
+
+.owner-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.owner-option:hover {
+  background: #f3f4f6;
+}
+
+.owner-loading {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #888;
+}
+
 
 .data-table thead {
   background: rgba(30, 41, 59, 0.8);

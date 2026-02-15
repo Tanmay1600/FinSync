@@ -30,6 +30,10 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [showFabMenu, setShowFabMenu] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [updatingLeadId, setUpdatingLeadId] = useState<number | null>(null)
+  const [ownerAgents, setOwnerAgents] = useState<Record<number, any[]>>({});
+  const [openOwnerDropdown, setOpenOwnerDropdown] = useState<number | null>(null);
+  const [changingOwnerId, setChangingOwnerId] = useState<number | null>(null);
+
   const [activeTab, setActiveTab] = useState<TabType>('interactions')
   const fabRef = useRef<HTMLDivElement>(null)
   /* ============================= */
@@ -57,6 +61,59 @@ const changeLeadState = async (leadId: number, newState: string) => {
 
   return response.data;
 };
+  const fetchLeadAgents = async (leadId: number) => {
+  const token = localStorage.getItem("auth_token");
+
+  const res = await axios.get(
+    `http://localhost:5000/api/interactions/leads/${leadId}/agents`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  setOwnerAgents(prev => ({
+    ...prev,
+    [leadId]: res.data
+  }));
+};
+const changeLeadOwner = async (leadId: number, newOwnerId: number) => {
+  const token = localStorage.getItem("auth_token");
+
+  setChangingOwnerId(leadId);
+
+  await axios.put(
+    `http://localhost:5000/api/interactions/leads/${leadId}/owner`,
+    { new_owner_id: newOwnerId },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  // optimistic UI update
+  setLeads(prev =>
+    prev.map(l =>
+      l.id === leadId
+        ? {
+            ...l,
+            ownerId: newOwnerId,
+            interaction: {
+              ...l.interaction!,
+              agent: ownerAgents[leadId].find(a => a.id === newOwnerId)
+            }
+          }
+        : l
+    )
+  );
+
+  setOpenOwnerDropdown(null);
+  setChangingOwnerId(null);
+};
+
 
   const loadData = useCallback(async () => {
     try {
