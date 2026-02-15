@@ -68,11 +68,13 @@ def create_interaction():
         agent_id=user.id,
         name=data.get("name"),
         mobNo=data.get("mobNo"),
+        mode=data.get("mode", "field") ,
         tagIds=data.get("tagIds"),
         email=data.get("email"),
         image_url=data.get("image_url"),
         audio_url=data.get("audio_url"),
         remarks=data.get("remarks"),
+         # default to stall if not provided
     )
 
     if not success:

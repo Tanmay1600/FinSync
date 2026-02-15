@@ -2366,6 +2366,44 @@ button:disabled {
   max-width: 1400px;
   margin: 0 auto;
 }
+.dashboard-section {
+  width: 100%;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+
+/* tablet */
+@media (max-width: 1100px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* mobile */
+@media (max-width: 600px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.table-container {
+  width: 100%;
+  min-height: 320px;
+  overflow-x: auto;
+}
+
+.empty-state {
+  height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  opacity: 0.85;
+  text-align: center;
+}
 
 .dashboard-header {
   margin-bottom: 2rem;
@@ -2437,6 +2475,94 @@ button:disabled {
   font-weight: 700;
   color: #f8fafc;
 }
+ .lead-state-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.lead-state-select {
+  appearance: none;
+  border: none;
+
+  padding: 6px 30px 6px 14px;
+  border-radius: 999px;
+
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+
+  cursor: pointer;
+
+  transition: all 0.2s ease;
+
+  background-color: #1e293b;
+  color: white;
+
+  outline: none;
+}
+.lead-state-wrapper::after {
+  content: "▾";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+}
+.lead-state-select:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+}
+
+.lead-state-select:focus {
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.35);
+}
+.lead-state-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.state-interaction {
+  background: rgba(59,130,246,0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59,130,246,0.4);
+}
+
+.state-follow_up {
+  background: rgba(245,158,11,0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245,158,11,0.4);
+}
+
+.state-engaged {
+  background: rgba(168,85,247,0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168,85,247,0.4);
+}
+
+.state-meeting {
+  background: rgba(14,165,233,0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(14,165,233,0.4);
+}
+
+.state-outcome {
+  background: rgba(16,185,129,0.15);
+  color: #34d399;
+  border: 1px solid rgba(16,185,129,0.4);
+}
+
+.state-closed {
+  background: rgba(100,116,139,0.2);
+  color: #cbd5f5;
+  border: 1px solid rgba(100,116,139,0.4);
+}
+.lead-state-select option {
+  background-color: #0f172a;
+  color: white;
+}
+
+
+
 
 .section-badge {
   padding: 0.25rem 0.75rem;
@@ -2693,7 +2819,7 @@ button:disabled {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.925rem;
-  table-layout: fixed;
+  table-layout: auto !important;
   min-width: 1000px;
 }
 
@@ -2721,6 +2847,13 @@ button:disabled {
 
 .data-table tbody tr:last-child {
   border-bottom: none;
+}
+
+
+.data-table th:last-child,
+.data-table td:last-child {
+  width: 120px;
+  text-align: center;
 }
 
 .data-table tbody td {

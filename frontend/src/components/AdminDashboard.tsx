@@ -2,12 +2,24 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { Users, Activity, CheckCircle, Plus, X, UserPlus, List, BarChart3, UserCheck } from 'lucide-react'
 import { api, type Lead, type Interaction, type AgentSummary } from '../lib/api'
 import { InviteAgent } from './InviteAgent'
+import axios from 'axios'
+import { Image, Mic } from "lucide-react";
+
 
 interface AdminDashboardProps {
   onNavigate: (tab: 'stall' | 'field') => void
 }
 
 type TabType = 'interactions' | 'leads' | 'agents'
+const LEAD_STATES = [
+  "INTERACTION",
+  "FOLLOW_UP",
+  "ENGAGED",
+  "MEETING",
+  "OUTCOME",
+  "CLOSED"
+]
+
 
 export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [leads, setLeads] = useState<Lead[]>([])
@@ -17,8 +29,34 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   const [error, setError] = useState<string | null>(null)
   const [showFabMenu, setShowFabMenu] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
+  const [updatingLeadId, setUpdatingLeadId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<TabType>('interactions')
   const fabRef = useRef<HTMLDivElement>(null)
+  /* ============================= */
+/* Change Lead State (Admin) */
+/* ============================= */
+const changeLeadState = async (leadId: number, newState: string) => {
+  const token = localStorage.getItem("auth_token");
+
+  if (!token) {
+    throw new Error("User not authenticated");
+  }
+
+  const response = await axios.put(
+    `http://localhost:5000/api/interactions/leads/${leadId}/state`,
+    {
+      state: newState,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  return response.data;
+};
 
   const loadData = useCallback(async () => {
     try {
@@ -38,6 +76,26 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       setLoading(false)
     }
   }, [])
+  const handleStateChange = async (leadId: number, newState: string) => {
+    try {
+      setUpdatingLeadId(leadId)
+
+      await changeLeadState(leadId, newState)
+
+      // optimistic update
+      setLeads(prev =>
+        prev.map(l =>
+          l.id === leadId ? { ...l, state: newState } : l
+        )
+      )
+    } catch (err) {
+      console.error(err)
+      alert("Failed to update lead state")
+    } finally {
+      setUpdatingLeadId(null)
+    }
+  }
+
 
   useEffect(() => {
     loadData()
@@ -192,6 +250,8 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                     <th>Score</th>
                     <th>Tags</th>
                     <th>Remarks</th>
+                    <th>Source</th>
+
                   </tr>
                 </thead>
                 <tbody>
@@ -232,6 +292,37 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                       <td className="table-remarks">
                         {interaction.remarks || '-'}
                       </td>
+                      <td>
+  <div className="source-icons">
+    {interaction.image_url && (
+      <button
+        className="source-btn"
+        onClick={() => {
+  if (interaction.image_url) {
+    window.open(interaction.image_url, "_blank");
+  }
+}}
+
+      >
+        <Image size={16} />
+      </button>
+    )}
+
+    {interaction.audio_note_url && (
+      <button
+        className="source-btn"
+        onClick={() =>
+  interaction.audio_note_url &&
+  window.open(interaction.audio_note_url, "_blank")
+}
+
+      >
+        <Mic size={16} />
+      </button>
+    )}
+  </div>
+</td>
+
                     </tr>
                   ))}
                 </tbody>
@@ -260,6 +351,8 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                     <th>Score</th>
                     <th>Agent</th>
                     <th>Tags</th>
+                    <th>Source</th>
+
                   </tr>
                 </thead>
                 <tbody>
@@ -276,8 +369,24 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                       <td>{lead.email || '-'}</td>
                       <td>{lead.mobNo || '-'}</td>
                       <td>
-                        <span className="lead-state-badge">{lead.state}</span>
-                      </td>
+  <div className="lead-state-wrapper">
+    <select
+      className={`lead-state-select state-${lead.state.toLowerCase()}`}
+      value={lead.state}
+      disabled={updatingLeadId === lead.id}
+      onChange={(e) =>
+        handleStateChange(lead.id, e.target.value)
+      }
+    >
+      {LEAD_STATES.map(state => (
+        <option key={state} value={state}>
+          {state.replace("_", " ")}
+        </option>
+      ))}
+    </select>
+  </div>
+</td>
+
                       <td>
                         {lead.interaction ? (
                           <span className="score-badge">{lead.interaction.score} pts</span>
@@ -305,6 +414,40 @@ export function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                           </div>
                         ) : '-'}
                       </td>
+                      <td>
+  <div className="source-icons">
+
+    {/* IMAGE SOURCE */}
+    <button
+      className="source-btn"
+      disabled={!lead.interaction?.image_url}
+      onClick={() => {
+        if (lead.interaction?.image_url) {
+          window.open(lead.interaction.image_url, "_blank");
+        }
+      }}
+      title="View Image"
+    >
+      <Image size={16} />
+    </button>
+
+    {/* AUDIO SOURCE */}
+    <button
+      className="source-btn"
+      disabled={!lead.interaction?.audio_note_url}
+      onClick={() => {
+        if (lead.interaction?.audio_note_url) {
+          window.open(lead.interaction.audio_note_url, "_blank");
+        }
+      }}
+      title="Play Audio"
+    >
+      <Mic size={16} />
+    </button>
+
+  </div>
+</td>
+
                     </tr>
                   ))}
                 </tbody>

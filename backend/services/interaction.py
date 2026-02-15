@@ -30,12 +30,13 @@ def add_interaction(
     agent_id: int,
     name: str,
     mobNo: str,
+    mode: str,
     tagIds: list = None,
     email: Optional[str] = None,
     image_url: Optional[str] = None,
     audio_url: Optional[str] = None,
     remarks: Optional[str] = None,
-    mode: str = "field"
+    
 ) -> Tuple[bool, Optional[Dict], Optional[str]]:
 
     try:
@@ -94,7 +95,7 @@ def add_interaction(
 
             lead = Lead(
                 name=name.strip(),
-                email=email.strip() if email else None,
+                email=email.strip() if email else "email@notfound.com",
                 mobNo=mobNo,
                 ownerId=agent_id,
                 orgId=agent.orgId,
@@ -193,7 +194,7 @@ def add_interaction(
         # CASE 4 — OWNERSHIP SCORING
         # =====================================================
         owner_score = db.session.query(
-            func.coalesce(func.sum(Interaction.score), 0)
+        func.coalesce(func.sum(Interaction.score), 0)
         ).filter(
             Interaction.lead_id == lead.id,
             Interaction.agent_id == lead.ownerId
@@ -206,8 +207,11 @@ def add_interaction(
             Interaction.agent_id == agent_id
         ).scalar()
 
-        if agent_score > owner_score + 5:
+        # include new interaction
+        if (agent_score + new_score) > owner_score + 5:
             lead.ownerId = agent_id
+            db.session.flush()
+
 
         # =====================================================
         # CREATE NEW INTERACTION

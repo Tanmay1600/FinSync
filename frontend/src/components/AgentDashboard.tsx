@@ -2,26 +2,71 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { Users, Activity, TrendingUp, Target, Plus, X } from 'lucide-react'
 import { api, type Lead } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-
+import axios from 'axios'
+import { Image, Mic } from "lucide-react";
 interface AgentDashboardProps {
   onNavigate: (tab: 'stall' | 'field') => void
 }
+
+/* ============================= */
+/* Lead States */
+/* ============================= */
+const LEAD_STATES = [
+  "INTERACTION",
+  "FOLLOW_UP",
+  "ENGAGED",
+  "MEETING",
+  "OUTCOME",
+  "CLOSED"
+]
 
 export function AgentDashboard({ onNavigate }: AgentDashboardProps) {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const { user } = useAuth()
   const [showFabMenu, setShowFabMenu] = useState(false)
-  const fabRef = useRef<HTMLDivElement>(null)
+  const [updatingLeadId, setUpdatingLeadId] = useState<number | null>(null)
 
+  const { user } = useAuth()
+  const fabRef = useRef<HTMLDivElement>(null)
+  const changeLeadState = async (leadId: number, newState: string) => {
+  const token = localStorage.getItem("auth_token");
+
+  if (!token) {
+    throw new Error("User not authenticated");
+  }
+
+  const response = await axios.put(
+    `http://localhost:5000/api/interactions/leads/${leadId}/state`,
+    {
+      state: newState,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  return response.data;
+};
+
+
+  /* ============================= */
+  /* Load Leads */
+  /* ============================= */
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
+
       const leadsData = await api.getAllLeads()
-      // Filter leads by current user's ID (ownerId matches user.id)
-      const myLeads = leadsData.data.filter(lead => lead.ownerId === user?.id)
+
+      const myLeads = leadsData.data.filter(
+        (lead: Lead) => lead.ownerId === user?.id
+      )
+
       setLeads(myLeads)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data')
@@ -29,12 +74,15 @@ export function AgentDashboard({ onNavigate }: AgentDashboardProps) {
       setLoading(false)
     }
   }, [user?.id])
+  
 
   useEffect(() => {
     loadData()
   }, [loadData])
 
-  // Close menu when clicking outside
+  /* ============================= */
+  /* Close FAB menu */
+  /* ============================= */
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (fabRef.current && !fabRef.current.contains(event.target as Node)) {
@@ -46,11 +94,36 @@ export function AgentDashboard({ onNavigate }: AgentDashboardProps) {
       document.addEventListener('mousedown', handleClickOutside)
     }
 
-    return () => {
+    return () =>
       document.removeEventListener('mousedown', handleClickOutside)
-    }
   }, [showFabMenu])
 
+  /* ============================= */
+  /* Change Lead State */
+  /* ============================= */
+  const handleStateChange = async (leadId: number, newState: string) => {
+    try {
+      setUpdatingLeadId(leadId)
+
+      await changeLeadState(leadId, newState)
+
+      // optimistic update
+      setLeads(prev =>
+        prev.map(l =>
+          l.id === leadId ? { ...l, state: newState } : l
+        )
+      )
+    } catch (err) {
+      console.error(err)
+      alert("Failed to update lead state")
+    } finally {
+      setUpdatingLeadId(null)
+    }
+  }
+
+  /* ============================= */
+  /* Loading / Error */
+  /* ============================= */
   if (loading) {
     return (
       <div className="agent-dashboard loading">
@@ -62,88 +135,69 @@ export function AgentDashboard({ onNavigate }: AgentDashboardProps) {
   if (error) {
     return (
       <div className="agent-dashboard error">
-        <div className="error-message">
-          <p>{error}</p>
-          <button onClick={loadData} className="retry-button">Retry</button>
-        </div>
+        <p>{error}</p>
+        <button onClick={loadData}>Retry</button>
       </div>
     )
   }
 
+  /* ============================= */
+  /* Stats */
+  /* ============================= */
   const stats = {
     totalLeads: leads.length,
     totalInteractions: leads.filter(l => l.interaction).length,
-    avgScore: leads.filter(l => l.interaction).length > 0
-      ? Math.round(leads.filter(l => l.interaction).reduce((sum, l) => sum + (l.interaction?.score || 0), 0) / leads.filter(l => l.interaction).length)
-      : 0,
-    activeLeads: leads.filter(l => l.state === 'INTERACTION').length
+    avgScore:
+      leads.filter(l => l.interaction).length > 0
+        ? Math.round(
+            leads
+              .filter(l => l.interaction)
+              .reduce(
+                (sum, l) => sum + (l.interaction?.score || 0),
+                0
+              ) /
+              leads.filter(l => l.interaction).length
+          )
+        : 0,
+    activeLeads: leads.filter(l => l.state === "INTERACTION").length
   }
 
+  /* ============================= */
+  /* JSX */
+  /* ============================= */
   return (
     <div className="agent-dashboard">
+
       {/* Header */}
       <div className="dashboard-header">
         <h1>My Dashboard</h1>
         <p>Your leads and performance</p>
       </div>
 
-      {/* Stats Grid */}
+      {/* Stats */}
       <div className="stats-grid">
-        <div className="stat-card primary">
-          <div className="stat-icon">
-            <Users className="w-8 h-8" />
-          </div>
-          <div className="stat-content">
-            <div className="stat-number">{stats.totalLeads}</div>
-            <div className="stat-label">My Leads</div>
-          </div>
-        </div>
-        
-        <div className="stat-card success">
-          <div className="stat-icon">
-            <Activity className="w-8 h-8" />
-          </div>
-          <div className="stat-content">
-            <div className="stat-number">{stats.totalInteractions}</div>
-            <div className="stat-label">Interactions</div>
-          </div>
-        </div>
-        
-        <div className="stat-card info">
-          <div className="stat-icon">
-            <TrendingUp className="w-8 h-8" />
-          </div>
-          <div className="stat-content">
-            <div className="stat-number">{stats.avgScore}</div>
-            <div className="stat-label">Avg Score</div>
-          </div>
-        </div>
-        
-        <div className="stat-card warning">
-          <div className="stat-icon">
-            <Target className="w-4 h-4" />
-          </div>
-          <div className="stat-content">
-            <div className="stat-number">{stats.activeLeads}</div>
-            <div className="stat-label">Active</div>
-          </div>
-        </div>
+        <Stat icon={<Users />} value={stats.totalLeads} label="My Leads" />
+        <Stat icon={<Activity />} value={stats.totalInteractions} label="Interactions" />
+        <Stat icon={<TrendingUp />} value={stats.avgScore} label="Avg Score" />
+        <Stat icon={<Target />} value={stats.activeLeads} label="Active" />
       </div>
 
-      {/* My Leads Section */}
+      {/* Leads Table */}
       <section className="dashboard-section">
         <div className="section-header">
           <h2>My Leads</h2>
-          <span className="section-badge">{leads.length} total</span>
+          <span>{leads.length} total</span>
         </div>
-        {leads.length === 0 ? (
-          <div className="empty-state">
-            <Users className="w-12 h-12 opacity-30" />
-            <p>No leads assigned to you yet</p>
-            <small>Start capturing leads to see them here</small>
-          </div>
-        ) : (
-          <div className="table-container">
+
+        <div className="table-container">
+
+          {leads.length === 0 ? (
+            <div className="empty-state">
+              <Users className="w-12 h-12 opacity-30" />
+              <p>No leads assigned to you yet</p>
+              <small>Start capturing leads to see them here</small>
+            </div>
+          ) : (
             <table className="data-table">
               <thead>
                 <tr>
@@ -154,98 +208,151 @@ export function AgentDashboard({ onNavigate }: AgentDashboardProps) {
                   <th>Score</th>
                   <th>Mode</th>
                   <th>Tags</th>
+                  <th>Source</th>
                 </tr>
               </thead>
+
               <tbody>
-                {leads.map((lead) => (
+                {leads.map(lead => (
                   <tr key={lead.id}>
                     <td>
                       <div className="table-lead-info">
                         <div className="table-avatar">
                           {lead.name.charAt(0).toUpperCase()}
                         </div>
-                        <span className="table-lead-name">{lead.name}</span>
+                        {lead.name}
                       </div>
                     </td>
+
                     <td>{lead.email || '-'}</td>
                     <td>{lead.mobNo || '-'}</td>
+
+                    {/* STATE DROPDOWN */}
                     <td>
-                      <span className="lead-state-badge">{lead.state}</span>
+  <div className="lead-state-wrapper">
+    <select
+      className={`lead-state-select state-${lead.state.toLowerCase()}`}
+      value={lead.state}
+      disabled={updatingLeadId === lead.id}
+      onChange={(e) =>
+        handleStateChange(lead.id, e.target.value)
+      }
+    >
+      {LEAD_STATES.map(state => (
+        <option key={state} value={state}>
+          {state.replace("_", " ")}
+        </option>
+      ))}
+    </select>
+  </div>
+</td>
+
+
+                    <td>
+                      {lead.interaction
+                        ? `${lead.interaction.score} pts`
+                        : '-'}
                     </td>
+
                     <td>
-                      {lead.interaction ? (
-                        <span className="score-badge">{lead.interaction.score} pts</span>
-                      ) : '-'}
+                      {lead.interaction?.mode || '-'}
                     </td>
+
                     <td>
-                      {lead.interaction ? (
-                        <span className="mode-badge">{lead.interaction.mode}</span>
-                      ) : '-'}
-                    </td>
-                    <td>
-                      {lead.interaction && lead.interaction.tags.length > 0 ? (
+                      {lead.interaction?.tags?.length ? (
                         <div className="table-tags">
-                          {lead.interaction.tags.map((tagItem) => (
-                            <span 
-                              key={tagItem.id} 
+                          {lead.interaction.tags.map(tagItem => (
+                            <span
+                              key={tagItem.id}
                               className="tag-badge-small"
-                              style={{ 
+                              style={{
                                 backgroundColor: `${tagItem.tag.color}20`,
                                 borderColor: tagItem.tag.color,
                                 color: tagItem.tag.color
                               }}
                             >
-                              {tagItem.tag.text} (+{tagItem.tag.score})
+                              {tagItem.tag.text}
                             </span>
                           ))}
                         </div>
                       ) : '-'}
                     </td>
+                    <td>
+  <div className="source-icons">
+
+    {/* IMAGE SOURCE */}
+    <button
+      className="source-btn"
+      disabled={!lead.interaction?.image_url}
+      onClick={() => {
+        if (lead.interaction?.image_url) {
+          window.open(lead.interaction.image_url, "_blank");
+        }
+      }}
+      title="View Image"
+    >
+      <Image size={16} />
+    </button>
+
+    {/* AUDIO SOURCE */}
+    <button
+      className="source-btn"
+      disabled={!lead.interaction?.audio_note_url}
+      onClick={() => {
+        if (lead.interaction?.audio_note_url) {
+          window.open(lead.interaction.audio_note_url, "_blank");
+        }
+      }}
+      title="Play Audio"
+    >
+      <Mic size={16} />
+    </button>
+
+  </div>
+</td>
+
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </div>
       </section>
 
-      {/* Floating Action Button */}
+      {/* FAB */}
       <div className="fab-container" ref={fabRef}>
         {showFabMenu && (
           <div className="fab-menu">
-            <button 
-              className="fab-option stall-option"
-              onClick={() => {
-                onNavigate('stall')
-                setShowFabMenu(false)
-              }}
-            >
-              <Plus className="w-5 h-5" />
-              <span>Stall Capture</span>
+            <button onClick={() => onNavigate('stall')}>
+              Stall Capture
             </button>
-            <button 
-              className="fab-option field-option"
-              onClick={() => {
-                onNavigate('field')
-                setShowFabMenu(false)
-              }}
-            >
-              <Activity className="w-5 h-5" />
-              <span>Field Capture</span>
+            <button onClick={() => onNavigate('field')}>
+              Field Capture
             </button>
           </div>
         )}
-        
-        <button 
-          className={`fab-main ${showFabMenu ? 'active' : ''}`}
+
+        <button
+          className="fab-main"
           onClick={() => setShowFabMenu(!showFabMenu)}
         >
-          {showFabMenu ? (
-            <X className="w-6 h-6" />
-          ) : (
-            <Plus className="w-6 h-6" />
-          )}
+          {showFabMenu ? <X /> : <Plus />}
         </button>
+      </div>
+    </div>
+  )
+}
+
+/* ============================= */
+/* Small Stat Component */
+/* ============================= */
+function Stat({ icon, value, label }: any) {
+  return (
+    <div className="stat-card">
+      <div className="stat-icon">{icon}</div>
+      <div>
+        <div className="stat-number">{value}</div>
+        <div className="stat-label">{label}</div>
       </div>
     </div>
   )

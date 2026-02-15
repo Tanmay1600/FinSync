@@ -11,6 +11,7 @@ interface AuthContextValue {
   register: (input: RegisterInput) => Promise<void>
   setPassword: (input: SetPasswordInput) => Promise<void>
   logout: () => void
+  
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)

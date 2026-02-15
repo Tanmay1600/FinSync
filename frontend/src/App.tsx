@@ -4,6 +4,7 @@ import { AppProvider } from './context/AppContext'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Shell } from './components/Shell'
 import { Login, Register, SetPassword } from './components/auth'
+import { AcceptInvite } from './components/AcceptInvite'
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -59,6 +60,14 @@ function AppRoutes() {
         element={
           <PublicRoute>
             <Register />
+          </PublicRoute>
+        }
+      />
+      <Route
+        path="/accept-invite"
+        element={
+          <PublicRoute>
+            <AcceptInvite />
           </PublicRoute>
         }
       />

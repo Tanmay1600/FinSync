@@ -1,5 +1,17 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
+import axios from 'axios'
 
+export interface CreateInteractionInput {
+  agent_id: number
+  name: string
+  mobNo: string
+  mode: "stall" | "field"
+  tagIds?: number[]
+  email?: string
+  image_url?: string
+  audio_url?: string
+  remarks?: string
+}
 export interface User {
   id: number
   name: string
@@ -431,6 +443,7 @@ class ApiService {
 
     return data
   }
-}
+  }
+
 
 export const api = new ApiService()
