@@ -13,6 +13,27 @@ A clean, production-ready Flask template for building WhatsApp bots using the Wh
 - ✅ Environment-based configuration
 - ✅ Mock mode for local testing without credentials
 
+## 🔧 Implementation Status (This Session)
+
+**No changes were made to this folder during this session.**
+
+This is a **separate WhatsApp bot service** (experimental/standalone) that is independent from the main lead capture system (frontend + backend).
+
+### What This Folder Contains:
+This is a complete WhatsApp Cloud API bot template with:
+- Webhook handlers for incoming WhatsApp messages
+- Conversational state management
+- Integration with Cloudinary and external CRM APIs
+- Business card extraction flow (visiting card processing)
+- Audio transcription support (Vosk/Gemini)
+
+### Relationship to Main Project:
+- **Frontend (`../frontend`)**: Progressive web app for field agents, uses camera + Gemini AI for business card scanning
+- **Backend (`../backend`)**: REST API for lead management, interactions, and authentication
+- **FlaskProject2 (This Folder)**: WhatsApp bot experiment (not actively integrated with main system)
+
+This session focused exclusively on the **frontend** (Gemini AI integration, OCR removal, tag system unification) and **backend** (documentation updates only). The WhatsApp bot remains unchanged.
+
 ## Quick Start
 
 ### 1. Clone and Setup

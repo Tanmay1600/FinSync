@@ -1,6 +1,123 @@
 # Hack The Tank - Backend API
 
-A Professional Flask REST API with PostgreSQL (Supabase) and JWT Authentication.
+A Professional Flask REST API with PostgreSQL (Supabase) and JWT Authentication for conference/event lead management.
+
+## 🎯 Overview
+
+This backend powers a dual-mode lead capture system for conferences and trade shows:
+
+**Stall Mode (Kiosk/Booth):**
+- Quick visitor entry with email and phone validation
+- Real-time duplicate detection
+- Offline-first frontend with background sync
+
+**Field Mode (On-Floor Capture):**
+- AI-powered business card scanning via Google Gemini  
+- Audio note recording with Cloudinary storage
+- Automatic extraction of contact details from card images
+- Syncs captured data with image/audio URLs
+
+## ✨ Key Features
+
+- ✅ JWT-based authentication with role-based access (admin/agent)
+- ✅ Organization multi-tenancy
+- ✅ Tag system for lead qualification (15 predefined tags with scores)
+- ✅ Interaction tracking with automatic lead ownership management
+- ✅ Support for Cloudinary image/audio URLs (business cards, voice notes)
+- ✅ Duplicate prevention (phone number per organization)
+- ✅ State management (interaction → qualified → converted)
+- ✅ Invite system for agent onboarding
+- ✅ RESTful API design with comprehensive validation
+
+## 🔧 Implementation Status (This Session)
+
+**No code changes were made to the backend during this session.** The backend was already fully implemented and production-ready with all required endpoints and functionality.
+
+### What Already Existed:
+✅ **Authentication System** (`routes/auth_routes.py`, `services/auth.py`)
+- User registration with organization creation
+- JWT-based login
+- Password hashing with bcrypt
+- Role-based access control (admin/agent)
+
+✅ **Interaction Endpoints** (`routes/interaction_routes.py`, `services/interaction.py`)
+- `POST /api/interactions` - Create interaction with tags, images, audio URLs
+- Support for `mode` field ("field" or "stall")
+- Automatic lead creation if not exists
+- Lead ownership management based on interaction scores
+- Tag association and scoring
+
+✅ **Data Models** (`models/`)
+- User, Organization, Lead, Interaction, Tag, InteractionTag
+- Proper foreign key relationships
+- Unique constraints (phone per org, email per org)
+- Timestamp tracking (created_at, updated_at)
+
+✅ **Database Migrations** (`migrations/versions/`)
+- Alembic migration scripts for schema changes
+- Version control for database structure
+
+✅ **Validation System** (`utils/validators.py`)
+- Email format validation
+- Phone number validation (10 digits)
+- Name and organization name validation
+- URL validation for image_url and audio_url fields
+
+### What Was Updated:
+📝 **Documentation Only** (README.md)
+- Enhanced overview to describe Field vs Stall modes
+- Updated interaction endpoint documentation:
+  - Added `mode` field description ("field" | "stall")
+  - Documented `image_url` and `audio_url` fields (Cloudinary URLs)
+  - Updated phone validation (10 digits exactly)
+  - Added notes about Gemini AI-generated remarks
+  - Clarified email fallback handling (`xxx@temp.email` format)
+
+### Frontend Integration Points:
+The backend seamlessly accepts data from the frontend's Gemini AI pipeline:
+
+**Request from Frontend:**
+```json
+{
+  "name": "HARPER RUSSO",           // From Gemini extraction
+  "mobNo": "1234567890",             // Cleaned by frontend (last 10 digits)
+  "email": "1234567890@temp.email",  // Fallback if not on card
+  "mode": "field",                   // Capture mode
+  "image_url": "https://res.cloudinary.com/.../field_cards/xxx.jpg",  // Cloudinary URL
+  "audio_url": "https://res.cloudinary.com/.../field_audio/xxx.webm", // Cloudinary URL
+  "tagIds": [1, 2, 3],               // Selected tags
+  "remarks": "General Manager. www.reallygreatsite.com. 123 Anywhere St."  // From Gemini
+}
+```
+
+**Backend Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 5,
+    "lead_id": 3,
+    "agent_id": 5,
+    "mode": "field",
+    "remarks": "General Manager...",
+    "image_url": "https://res.cloudinary.com/...",
+    "audio_url": "https://res.cloudinary.com/...",
+    "score": 15,
+    "tags": [...]
+  }
+}
+```
+
+### Why No Backend Changes Were Needed:
+The existing backend API was already designed to handle:
+- Optional `image_url` and `audio_url` fields
+- Variable phone number formats (validation accepts 10 digits)
+- Optional email with no strict domain requirements
+- Text-based `remarks` field of any length
+- Tag arrays for lead qualification
+- Mode differentiation for analytics
+
+The frontend's Gemini AI integration and Cloudinary uploads work as **client-side enhancements** that feed structured data into the existing API contracts.
 
 ## Project Structure
 
@@ -429,9 +546,9 @@ Content-Type: application/json
 
 **Endpoint:** `POST /api/interactions`
 
-**Description:** Agent adds an interaction for a lead. Creates lead if not exists, updates lead owner if new interaction score is higher. Interaction score is calculated from selected tags.
+**Description:** Create a new interaction (lead capture) from either stall (kiosk/booth) or field (on-floor) mode. Creates lead if not exists, updates lead owner if new interaction score is higher. Interaction score is calculated from selected tags. Supports Cloudinary image and audio URLs for business cards and voice notes.
 
-**Authorization:** Requires JWT token from agent user in Authorization header
+**Authorization:** Requires JWT token from authenticated user in Authorization header
 
 **Request Headers:**
 ```
@@ -443,23 +560,27 @@ Authorization: Bearer <agent_jwt_token>
 ```json
 {
   "name": "John Doe",
-  "mobNo": "+1234567890",
+  "mobNo": "1234567890",
   "email": "john@example.com",
-  "image_url": "https://example.com/image.jpg",
-  "audio_url": "https://example.com/audio.mp3",
+  "mode": "field",
+  "image_url": "https://res.cloudinary.com/xxx/image/upload/field_cards/xxx.jpg",
+  "audio_url": "https://res.cloudinary.com/xxx/video/upload/field_audio/xxx.webm",
   "tagIds": [1, 2, 3],
-  "remarks": "Customer showed interest in product"
+  "remarks": "General Manager. www.reallygreatsite.com. 123 Anywhere St., Any City"
 }
 ```
 
 **Field Validation:**
 - `name`: Required, 2-120 characters
-- `mobNo`: Required, 7-20 characters (digits, +, -, (), spaces allowed), unique per organization
-- `email`: Optional, valid email format
-- `image_url`: Optional, URL format
-- `audio_url`: Optional, URL format
-- `tagIds`: Required, non-empty array of tag IDs
-- `remarks`: Optional, text field
+- `mobNo`: Required, 10 digits exactly (cleaned phone number)
+- `email`: Optional, valid email format (fallback emails like `1234567890@temp.email` are common for field captures)
+- `mode`: Optional, either "field" or "stall" (default: "stall")
+  - **field**: On-floor capture with business card scanning
+  - **stall**: Kiosk/booth quick entry
+- `image_url`: Optional, Cloudinary URL for uploaded business card image
+- `audio_url`: Optional, Cloudinary URL for uploaded audio note
+- `tagIds`: Required, non-empty array of tag IDs (1-15)
+- `remarks`: Optional, text field (often populated by Gemini AI extraction from business cards)
 
 **Success Response (200):**
 ```json
