@@ -43,3 +43,6 @@ build/
 
 # OS
 Thumbs.db
+
+flaskproject2/*
+
