@@ -1,7 +1,6 @@
 import { type FormEvent, useState, useRef, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import { ScanLine, Mic, FileText, Plus, Camera, Loader, MicOff } from 'lucide-react'
-import Tesseract from 'tesseract.js'
 import { useVoskSpeechRecognition } from '../hooks/useVoskSpeechRecognition'
 import { db } from '../lib/db'
 
@@ -34,14 +33,6 @@ const TAG_OPTIONS: TagOption[] = [
 type CaptureMode = 'scan' | 'audio' | 'text' | null
 type ViewState = 'initial' | 'mode-selection' | 'form'
 
-interface ParsedBusinessCard {
-  name?: string
-  company?: string
-  email?: string
-  phone?: string
-  title?: string
-}
-
 export function FieldCapture() {
   const [viewState, setViewState] = useState<ViewState>('initial')
   const [mode, setMode] = useState<CaptureMode>(null)
@@ -68,12 +59,6 @@ export function FieldCapture() {
   const audioChunksRef = useRef<Blob[]>([])
   const [audioNoteId, setAudioNoteId] = useState<number | null>(null)
 
-  // OCR state
-  const [isProcessingOCR, setIsProcessingOCR] = useState(false)
-  const [ocrProgress, setOcrProgress] = useState(0)
-  const [ocrText, setOcrText] = useState('')
-  const [parsedInfo, setParsedInfo] = useState<ParsedBusinessCard | null>(null)
-
   // Vosk speech recognition
   const {
     isReady: isVoskReady,
@@ -88,266 +73,6 @@ export function FieldCapture() {
   } = useVoskSpeechRecognition()
 
   const { addLead, appendHistory } = useApp()
-
-  // Parse business card text to extract contact information
-  const parseBusinessCardText = (text: string): ParsedBusinessCard => {
-    const lines = text.split('\n').filter(line => line.trim().length > 0)
-    const parsed: ParsedBusinessCard = {}
-
-    // Clean and normalize text
-    const cleanedText = text.replace(/[^\w\s@.+()-]/g, ' ').replace(/\s+/g, ' ')
-    
-    // Enhanced Email regex - more comprehensive
-    const emailRegex = /\b[A-Za-z0-9](?:[A-Za-z0-9._%-]*[A-Za-z0-9])?@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}\b/g
-    
-    // Enhanced Phone regex - supports international formats
-    const phoneRegex = /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}|(?:\+\d{1,4}[-.\s]?)?(?:\([0-9]{1,4}\)[-.\s]?)?[0-9]{1,4}[-.\s]?[0-9]{1,4}[-.\s]?[0-9]{1,9}|(?:\d{3}[-.\s]?\d{3}[-.\s]?\d{4})|(?:\d{10})/g
-    
-    // Website/URL regex
-    const websiteRegex = /(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+(?:\/[^\s]*)?/g
-    
-    // Social media handles
-    const socialRegex = /(?:@|linkedin\.com\/in\/|twitter\.com\/|facebook\.com\/)[a-zA-Z0-9._-]+/g
-    
-    // Job titles/positions regex
-    const titleRegex = /\b(?:CEO|CTO|CFO|COO|VP|Vice President|President|Director|Manager|Senior|Jr|Junior|Lead|Head|Chief|Principal|Founder|Co-Founder|Partner|Associate|Consultant|Specialist|Analyst|Engineer|Developer|Designer|Architect|Coordinator|Executive|Officer|Administrator|Supervisor|Representative|Sales|Marketing|Operations|Finance|HR|Human Resources|IT|Technical|Business|Product|Project)\b/gi
-
-    // Extract emails with validation
-    const emailMatches = cleanedText.match(emailRegex)
-    if (emailMatches) {
-      // Filter out obvious false positives
-      const validEmail = emailMatches.find(email => {
-        const domainPart = email.split('@')[1]?.toLowerCase()
-        return domainPart && 
-               !domainPart.includes('..') &&
-               domainPart.length > 2 &&
-               !domainPart.startsWith('.') &&
-               !domainPart.endsWith('.')
-      })
-      if (validEmail) {
-        parsed.email = validEmail.toLowerCase()
-      }
-    }
-    
-    // Extract phone numbers with cleaning
-    const phoneMatches = cleanedText.match(phoneRegex)
-    if (phoneMatches) {
-      // Find the most likely phone number (prefer longer, formatted numbers)
-      const validPhone = phoneMatches
-        .map(phone => phone.replace(/\s+/g, ' ').trim())
-        .filter(phone => {
-          // Remove obvious false positives
-          const digitsOnly = phone.replace(/\D/g, '')
-          return digitsOnly.length >= 10 && digitsOnly.length <= 15
-        })
-        .sort((a, b) => b.length - a.length)[0] // Prefer longer formatted numbers
-      
-      if (validPhone) {
-        parsed.phone = validPhone
-      }
-    }
-
-    // Extract websites
-    const websiteMatches = cleanedText.match(websiteRegex)
-    if (websiteMatches) {
-      const website = websiteMatches[0]
-      // Store as additional info (could extend ParsedBusinessCard interface)
-      console.log('Website found:', website)
-    }
-
-    // Process each line for name, company, and title
-    const meaningfulLines = lines
-      .map(line => line.trim())
-      .filter(line => 
-        line.length > 2 && 
-        line.length < 80 &&
-        !emailRegex.test(line) && 
-        !phoneRegex.test(line) &&
-        !websiteRegex.test(line) &&
-        !socialRegex.test(line)
-      )
-
-    // Enhanced name detection
-    for (let i = 0; i < meaningfulLines.length && i < 6; i++) {
-      const line = meaningfulLines[i]
-      
-      if (!parsed.name) {
-        const words = line.split(/\s+/)
-        const isAllCaps = line === line.toUpperCase()
-        const hasProperCase = words.length >= 2 && words.length <= 4 && 
-                             words.every(word => 
-                               word.length > 0 && 
-                               word.charAt(0) === word.charAt(0).toUpperCase() &&
-                               word.slice(1) === word.slice(1).toLowerCase()
-                             )
-        
-        // Business/organization keywords
-        const orgKeywords = ['ltd', 'llc', 'inc', 'corp', 'company', 'co', 'pvt', 'limited', 'group', 'solutions', 'services', 'technologies', 'enterprises', 'systems', 'consulting', 'partners', 'associates', 'international', 'global', 'worldwide', 'holdings', 'foundation', 'institute', 'university', 'hospital', 'clinic', 'bank', 'financial']
-        const lowerLine = line.toLowerCase()
-        const hasOrgKeyword = orgKeywords.some(keyword => lowerLine.includes(keyword))
-        
-        // Title keywords
-        const hasTitle = titleRegex.test(line)
-        
-        // Name patterns: proper case, 2-4 words, no org keywords, no titles
-        if (hasProperCase && !isAllCaps && !hasOrgKeyword && !hasTitle) {
-          // Additional validation for names
-          const namePattern = /^[A-Z][a-z]+(?: [A-Z][a-z.]*){1,3}$/
-          if (namePattern.test(line) || (words.length === 2 && hasProperCase)) {
-            parsed.name = line
-            continue
-          }
-        }
-      }
-    }
-
-    // Enhanced company name detection
-    for (let i = 0; i < meaningfulLines.length && i < 8; i++) {
-      const line = meaningfulLines[i]
-      
-      if (!parsed.company && line !== parsed.name) {
-        const lowerLine = line.toLowerCase()
-        const isAllCaps = line === line.toUpperCase()
-        
-        // Company indicators
-        const companyKeywords = ['ltd', 'llc', 'inc', 'corp', 'corporation', 'company', 'co', 'pvt', 'private', 'limited', 'group', 'solutions', 'services', 'technologies', 'tech', 'enterprises', 'systems', 'consulting', 'consultancy', 'partners', 'associates', 'international', 'global', 'worldwide', 'holdings', 'foundation', 'institute']
-        const hasCompanyKeyword = companyKeywords.some(keyword => lowerLine.includes(keyword))
-        
-        // Industry-specific terms
-        const industryTerms = ['software', 'digital', 'media', 'marketing', 'finance', 'financial', 'insurance', 'real estate', 'healthcare', 'medical', 'pharmaceutical', 'manufacturing', 'retail', 'wholesale', 'logistics', 'transportation', 'education', 'research', 'development', 'engineering', 'construction', 'energy', 'oil', 'gas', 'banking', 'investment', 'capital', 'ventures', 'innovations', 'communications', 'telecommunications', 'networks', 'security', 'defense']
-        const hasIndustryTerm = industryTerms.some(term => lowerLine.includes(term))
-        
-        if (hasCompanyKeyword || (isAllCaps && line.length > 3) || hasIndustryTerm) {
-          // Clean up company name
-          let companyName = line
-          if (isAllCaps) {
-            // Convert ALL CAPS to Title Case
-            companyName = line.toLowerCase().replace(/\b\w/g, l => l.toUpperCase())
-          }
-          parsed.company = companyName
-          continue
-        }
-      }
-    }
-
-    // Job title detection
-    for (const line of meaningfulLines) {
-      if (!parsed.title && line !== parsed.name && line !== parsed.company) {
-        const titleMatch = line.match(titleRegex)
-        if (titleMatch || 
-            (line.toLowerCase().includes('manager') || 
-             line.toLowerCase().includes('director') ||
-             line.toLowerCase().includes('executive'))) {
-          parsed.title = line
-          break
-        }
-      }
-    }
-
-    // Fallback: if no name found, try first non-company line
-    if (!parsed.name && meaningfulLines.length > 0) {
-      for (const line of meaningfulLines) {
-        if (line !== parsed.company && !titleRegex.test(line)) {
-          const words = line.split(/\s+/)
-          if (words.length >= 2 && words.length <= 4 && line.length < 40) {
-            parsed.name = line
-            break
-          }
-        }
-      }
-    }
-
-    return parsed
-  }
-
-
-
-  // Process OCR on captured image
-  const processOCR = async (imageDataUrl: string): Promise<ParsedBusinessCard | null> => {
-    setIsProcessingOCR(true)
-    setOcrProgress(0)
-    setOcrText('')
-
-    try {
-      // Preprocess image for better OCR
-      const preprocessedImage = await preprocessImage(imageDataUrl)
-      
-      const { data: { text } } = await Tesseract.recognize(
-        preprocessedImage,
-        'eng',
-        {
-          logger: (m: { status: string; progress: number }) => {
-            if (m.status === 'recognizing text') {
-              setOcrProgress(Math.round(m.progress * 100))
-            }
-          },
-        }
-      )
-
-      setOcrText(text)
-      const parsed = parseBusinessCardText(text)
-
-      setParsedInfo(parsed)
-
-      // Auto-fill form fields if parsing was successful
-      if (parsed.name) setName(parsed.name)
-      if (parsed.company) setCompany(parsed.company)
-      if (parsed.email) setEmail(parsed.email)
-      if (parsed.phone) setPhone(parsed.phone)
-
-      return parsed
-    } catch (error) {
-      console.error('OCR processing failed:', error)
-      alert('OCR processing failed. Please try again or enter details manually.')
-      return null
-    } finally {
-      setIsProcessingOCR(false)
-      setOcrProgress(0)
-    }
-  }
-
-  // Preprocess image to improve OCR accuracy
-  const preprocessImage = (imageDataUrl: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image()
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')!
-        
-        // Set canvas size to image size
-        canvas.width = img.width
-        canvas.height = img.height
-        
-        // Draw original image
-        ctx.drawImage(img, 0, 0)
-        
-        // Get image data for processing
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imageData.data
-        
-        // Convert to grayscale and enhance contrast
-        for (let i = 0; i < data.length; i += 4) {
-          // Grayscale conversion
-          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-          
-          // Enhance contrast (simple threshold)
-          const enhanced = gray > 128 ? 255 : 0
-          
-          data[i] = enhanced     // Red
-          data[i + 1] = enhanced // Green  
-          data[i + 2] = enhanced // Blue
-          // Alpha stays the same
-        }
-        
-        // Put processed data back
-        ctx.putImageData(imageData, 0, 0)
-        
-        // Return processed image as data URL
-        resolve(canvas.toDataURL('image/jpeg', 0.9))
-      }
-      img.src = imageDataUrl
-    })
-  }
 
   // Camera functions
   const startCamera = async () => {
@@ -379,9 +104,6 @@ export function FieldCapture() {
         const imageData = canvas.toDataURL('image/jpeg', 0.8)
         setCapturedImage(imageData)
         stopCamera()
-        
-        // Start OCR processing
-        processOCR(imageData)
       }
     }
   }
@@ -393,9 +115,6 @@ export function FieldCapture() {
     reader.onloadend = () => {
       const dataUrl = reader.result as string
       setCapturedImage(dataUrl)
-      setParsedInfo(null)
-      setOcrText('')
-      processOCR(dataUrl)
     }
     reader.readAsDataURL(file)
     e.target.value = ''
@@ -441,50 +160,14 @@ export function FieldCapture() {
             createdAt,
           })
           setAudioNoteId(id)
-            const runOcr = async (img: string) => {
-              const { data: { text } } = await Tesseract.recognize(
-                img,
-                'eng',
-                {
-                  logger: (m: { status: string; progress: number }) => {
-                    if (m.status === 'recognizing text') {
-                      setOcrProgress(Math.round(m.progress * 100))
-                    }
-                  },
-                }
-              )
-              return text
-            }
-
-            // Pass 1: preprocessed image
-            let text = await runOcr(preprocessedImage)
-            let parsed = parseBusinessCardText(text)
-
-            // Fallback extraction for missing fields
-            const fallback = extractFallbackFields(text)
-            if (!parsed.email && fallback.email) parsed.email = fallback.email
-            if (!parsed.phone && fallback.phone) parsed.phone = fallback.phone
-            if (!parsed.name && fallback.name) parsed.name = fallback.name
-
-            // Pass 2: raw image if key fields still missing
-            if ((!parsed.name || !parsed.email || !parsed.phone) && imageDataUrl !== preprocessedImage) {
-              const rawText = await runOcr(imageDataUrl)
-              text = `${text}\n${rawText}`
-              const parsed2 = parseBusinessCardText(rawText)
-              const fallback2 = extractFallbackFields(rawText)
-              parsed = {
-                name: parsed.name || parsed2.name || fallback2.name,
-                company: parsed.company || parsed2.company,
-                email: parsed.email || parsed2.email || fallback2.email,
-                phone: parsed.phone || parsed2.phone || fallback2.phone,
-                title: parsed.title || parsed2.title,
-              }
-            }
-
-            setOcrText(text)
-          console.error('Failed to save audio note to IndexedDB:', error)
-        } finally {
-          mediaRecorder.stream.getTracks().forEach((track) => track.stop())
+        } catch (dbError) {
+          console.error('Error saving audio note to IndexedDB:', dbError)
+          alert('Failed to save audio note. Please try again.')
+        }
+        
+        if (recordingIntervalRef.current) {
+          clearInterval(recordingIntervalRef.current)
+          recordingIntervalRef.current = null
         }
       }
 
@@ -552,22 +235,6 @@ export function FieldCapture() {
   }
 
   const handleSaveLead = async () => {
-    if (isProcessingOCR) {
-      alert('Please wait, extracting info from the card...')
-      return
-    }
-
-    // If we have a card image but no parsed info and key fields missing, try OCR once before saving
-    if (capturedImage && !parsedInfo && (!name.trim() || !email.trim() || !phone.trim())) {
-      const parsed = await processOCR(capturedImage)
-      if (parsed) {
-        if (!name.trim() && parsed.name) setName(parsed.name)
-        if (!company.trim() && parsed.company) setCompany(parsed.company)
-        if (!email.trim() && parsed.email) setEmail(parsed.email)
-        if (!phone.trim() && parsed.phone) setPhone(parsed.phone)
-      }
-    }
-
     // Validation: tags required
     if (tags.length === 0) {
       alert('Please select at least one tag before saving.')
@@ -617,16 +284,10 @@ export function FieldCapture() {
     setNote('')
     setMode(null)
     setViewState('initial')
-    setCapturedImage(null)
-    setAudioBlob(null)
-    setAudioNoteId(null)
-    setIsRecording(false)
-    setRecordingTime(0)
-    setIsProcessingOCR(false)
-    setOcrProgress(0)
-    setOcrText('')
-    setParsedInfo(null)
     stopCamera()
+    if (isRecording) {
+      stopAudioRecording()
+    }
   }
 
   const resetForm = () => {
@@ -638,15 +299,6 @@ export function FieldCapture() {
     setNote('')
     setMode(null)
     setViewState('initial')
-    setCapturedImage(null)
-    setAudioBlob(null)
-    setAudioNoteId(null)
-    setIsRecording(false)
-    setRecordingTime(0)
-    setIsProcessingOCR(false)
-    setOcrProgress(0)
-    setOcrText('')
-    setParsedInfo(null)
     stopCamera()
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current)
@@ -742,10 +394,17 @@ export function FieldCapture() {
                   />
                   <canvas ref={canvasRef} style={{ display: 'none' }} />
                   <div className="scan-frame"></div>
-                  {!isCameraActive && (
-                    <div className="camera-overlay">
-                      <Camera className="scan-icon-large" />
-                      <p>Starting camera...</p>
+                  {!isCameraActive && !capturedImage && (
+                    <div className="flex flex-col items-center justify-center p-6 border-2 border-dashed rounded-md">
+                      <button type="button" onClick={startCamera} className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">
+                        <Camera size={20} />
+                        Start Camera
+                      </button>
+                      <span className="my-2 text-gray-500">or</span>
+                      <button type="button" onClick={() => fileInputRef.current?.click()} className="text-blue-600 hover:underline">
+                        Upload an image
+                      </button>
+                      <input type="file" ref={fileInputRef} onChange={handleCardUpload} accept="image/*" className="hidden" />
                     </div>
                   )}
                 </div>
@@ -779,145 +438,38 @@ export function FieldCapture() {
                 <div className="captured-image-container">
                   <img src={capturedImage} alt="Captured card" className="captured-image" />
                   
-                  {/* OCR Processing Overlay */}
-                  {isProcessingOCR && (
-                    <div className="ocr-overlay">
-                      <div className="ocr-progress">
-                        <Loader className="w-6 h-6 animate-spin" />
-                        <span>Processing card... {ocrProgress}%</span>
-                        <div className="progress-bar">
-                          <div 
-                            className="progress-fill" 
-                            style={{ width: `${ocrProgress}%` }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                
-                {/* OCR Results */}
-                {parsedInfo && !isProcessingOCR && (
-                  <div className="ocr-results">
-                    <h4>✅ Card Information Detected:</h4>
-                    <div className="ocr-info">
-                      {parsedInfo.name && <div><strong>Name:</strong> {parsedInfo.name}</div>}
-                      {parsedInfo.company && <div><strong>Company:</strong> {parsedInfo.company}</div>}
-                      {parsedInfo.email && <div><strong>Email:</strong> {parsedInfo.email}</div>}
-                      {parsedInfo.phone && <div><strong>Phone:</strong> {parsedInfo.phone}</div>}
-                    </div>
-                    {ocrText && (
-                      <details className="ocr-debug">
-                        <summary>View raw OCR text</summary>
-                        <pre className="ocr-raw-text">{ocrText}</pre>
-                      </details>
-                    )}
-                  </div>
-                )}
-                
-                <p>
-                  {isProcessingOCR 
-                    ? 'Extracting text from visiting card...' 
-                    : parsedInfo 
-                    ? 'Information extracted! Review and edit below.'
-                    : 'Card captured! Processing OCR...'
-                  }
-                </p>
-                
-                <div className="scan-controls">
-                  <button 
-                    className="capture-photo-btn"
+                  <button
+                    type="button"
                     onClick={() => {
                       setCapturedImage(null)
-                      setParsedInfo(null)
-                      setOcrText('')
-                      setIsProcessingOCR(false)
                       startCamera()
                     }}
-                    disabled={isProcessingOCR}
+                    className="absolute top-2 right-2 bg-black bg-opacity-50 text-white p-2 rounded-full hover:bg-opacity-75"
                   >
-                    <Camera className="w-6 h-6" />
-                    Use Camera
+                    Retake
                   </button>
+                </div>
+                
+                <div className="flex justify-end">
                   <button
-                    className="secondary"
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isProcessingOCR}
+                    onClick={handleSaveLead}
+                    disabled={saving}
+                    className="inline-flex justify-center items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
                   >
-                    Upload Card Image
-                  </button>
-                  
-                  <button 
-                    className="secondary" 
-                    type="button"
-                    onClick={() => setMode('text')}
-                    disabled={isProcessingOCR}
-                  >
-                    Done
+                    {saving ? (
+                      <>
+                        Saving...
+                      </>
+                    ) : (
+                      'Save Lead'
+                    )}
                   </button>
                 </div>
               </>
             )}
           </div>
         </div>
-      )}
-
-      {mode === 'scan' && parsedInfo && (
-        <form className="form" onSubmit={(e) => { e.preventDefault(); handleSaveLead() }}>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={handleCardUpload}
-          />
-          <div className="form-notice">
-            <p>✨ Information auto-filled from visiting card. Please review and edit as needed:</p>
-          </div>
-          <label>
-            Name*
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label>
-            Company
-            <input value={company} onChange={(e) => setCompany(e.target.value)} />
-          </label>
-          <div className="form-row two">
-            <label>
-              Email
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </label>
-            <label>
-              Phone
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </label>
-          </div>
-          <div className="chips">
-            {TAG_OPTIONS.map((tag) => (
-              <button
-                type="button"
-                key={tag.id}
-                className={`chip chip-${tag.color}${tags.includes(tag.label) ? ' active' : ''}`}
-                onClick={() => toggleTag(tag)}
-              >
-                {tag.label}
-              </button>
-            ))}
-          </div>
-          <label>
-            Additional notes
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} />
-          </label>
-          <div className="form-row">
-            <button type="submit" disabled={saving}>
-              {saving ? 'Saving…' : 'Save lead'}
-            </button>
-            <button type="button" className="secondary" onClick={resetForm}>
-              Cancel
-            </button>
-          </div>
-        </form>
       )}
 
       {mode === 'audio' && (
