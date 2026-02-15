@@ -1,0 +1,182 @@
+WhatsApp Bot Template Architecture
+===================================
+
+Project Structure:
+------------------
+
+flaskproject2/
+│
+├── app.py                      # Flask application entry point
+├── webhook.py                  # WhatsApp webhook routes (GET/POST)
+├── config.py                   # Environment configuration
+├── whatsapp_client.py          # WhatsApp API client wrapper
+│
+├── models.py                   # Data models (ConversationState)
+│
+├── conversation_engine.py      # Main conversation logic
+├── conversation.py             # Backward compatibility layer
+│
+├── services/                   # External API integrations
+│   └── __init__.py            # Service stubs
+│
+├── scripts/                    # Utility scripts
+│   └── send_test_message.py   # Test message sender
+│
+├── .env                        # Environment variables (not in git)
+├── .gitignore                  # Git ignore rules
+├── requirements.txt            # Python dependencies
+└── README.md                   # Documentation
+
+
+Component Flow:
+===============
+
+┌─────────────────────┐
+│   WhatsApp User     │
+│   (Mobile Device)   │
+└──────────┬──────────┘
+           │
+           │ Sends Message
+           ▼
+┌─────────────────────┐
+│   WhatsApp Cloud    │
+│       API           │
+│   (Meta Platform)   │
+└──────────┬──────────┘
+           │
+           │ POST /webhook
+           ▼
+┌─────────────────────────────────────┐
+│           webhook.py                │
+│  ┌────────────────────────────┐   │
+│  │ verify_webhook() [GET]     │   │  ← Webhook verification
+│  │ - Verify token             │   │
+│  │ - Return challenge         │   │
+│  └────────────────────────────┘   │
+│  ┌────────────────────────────┐   │
+│  │ handle_message() [POST]    │   │  ← Message handler
+│  │ - Parse webhook data       │   │
+│  │ - Extract user & message   │   │
+│  │ - Mark as read             │   │
+│  │ - Call conversation engine │   │
+│  │ - Send response            │   │
+│  └────────────────────────────┘   │
+└────────────┬────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────┐
+│     conversation_engine.py          │
+│  ┌────────────────────────────┐   │
+│  │ ConversationEngine         │   │
+│  │ ─────────────────────────  │   │
+│  │ - sessions: Dict           │   │
+│  │   (stores user state)      │   │
+│  │                            │   │
+│  │ handle_incoming()          │   │
+│  │ - Get/Create session       │   │
+│  │ - Route based on state     │   │
+│  │ - Update state             │   │
+│  │ - Return response          │   │
+│  └────────────────────────────┘   │
+└────┬───────────────┬────────────────┘
+     │               │
+     │               └──────────────┐
+   ▼
+┌──────────────┐
+│  models.py   │
+│              │
+│ Conversation │
+│ State        │
+│ - state      │
+│ - language   │
+│ - context    │
+└──────────────┘
+     │
+     └──────────────┐
+                    ▼
+           ┌─────────────────┐
+           │  services/      │
+           │                 │
+           │  Custom API     │
+           │  Integrations   │
+           └─────────────────┘
+
+
+Data Flow Example:
+==================
+
+1. User sends: "Hello"
+   ↓
+2. WhatsApp → POST /webhook
+   ↓
+3. webhook.py extracts message
+   ↓
+4. conversation_engine.handle_incoming(user_id="123", message="hello")
+   ↓
+5. ConversationEngine:
+   - Gets/creates session for user "123"
+   - Checks current state (IDLE)
+   - Matches "hello" → greeting handler
+   - Returns: "👋 Hello! I'm your WhatsApp bot..."
+   ↓
+6. webhook.py sends response via WhatsApp API
+   ↓
+7. User receives message on WhatsApp
+
+
+Session Management:
+===================
+
+Each user has a ConversationState:
+- state: Current conversation state (e.g., "START", "MENU", etc.)
+- language: User's preferred language
+- context: Dict for storing conversation data
+
+Sessions persist in memory during app runtime.
+For production, consider:
+- Redis for distributed sessions
+- Database for persistent storage
+- Session timeout handling
+
+
+Extending the Bot:
+==================
+
+1. Adjust canned responses (RESPONSES dict) in conversation_engine.py
+2. Create new states in models.py
+3. Add handlers in conversation_engine.py
+4. Integrate external APIs via services/
+5. Update webhook.py for advanced message types
+
+
+Configuration:
+==============
+
+Environment Variables (.env):
+- APP_ID: WhatsApp App ID
+- APP_SECRET: App Secret  
+- ACCESS_TOKEN: API Access Token
+- PHONE_NUMBER_ID: WhatsApp Phone Number ID
+- VERIFY_TOKEN: Webhook verification token
+- BACKEND_BASE_URL: Optional backend API URL
+
+config.py loads these into Settings dataclass.
+
+
+API Client:
+===========
+
+whatsapp_client.py provides:
+- send_text_message(): Send messages
+- mark_as_read(): Blue tick read receipts
+
+Falls back to mock mode if credentials missing.
+
+
+Testing:
+========
+
+scripts/send_test_message.py:
+- Test bot without WhatsApp UI
+- Send messages programmatically
+- Verify API credentials
